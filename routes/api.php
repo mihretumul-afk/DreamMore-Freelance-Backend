@@ -5,6 +5,8 @@ use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
 use App\Http\Controllers\Api\V1\FreelancerProfileController;
 use App\Http\Controllers\Api\V1\EmployerProfileController;
+use App\Http\Controllers\Api\V1\ContractController;
+use App\Http\Controllers\Api\V1\MilestoneController;
 
 /*
 |--------------------------------------------------------------------------
@@ -39,6 +41,27 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/employer/profile', [EmployerProfileController::class, 'showCurrent']);
     Route::put('/employer/profile', [EmployerProfileController::class, 'update']);
+});
+
+// Stage 12 — Contracts & Milestones
+Route::middleware('auth:sanctum')->group(function () {
+    // Contracts
+    Route::get('/contracts', [ContractController::class, 'index']);
+    Route::get('/contracts/{contract}', [ContractController::class, 'show']);
+    Route::post('/contracts/{contract}/pause', [ContractController::class, 'pause']);
+    Route::post('/contracts/{contract}/resume', [ContractController::class, 'resume']);
+    Route::post('/contracts/{contract}/complete', [ContractController::class, 'complete']);
+    Route::post('/contracts/{contract}/cancel', [ContractController::class, 'cancel']);
+
+    // Milestones
+    Route::get('/contracts/{contract}/milestones', [MilestoneController::class, 'index']);
+    Route::post('/contracts/{contract}/milestones', [MilestoneController::class, 'store']);
+    Route::get('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'show']);
+    Route::put('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'update']);
+    Route::post('/contracts/{contract}/milestones/{milestone}/submit', [MilestoneController::class, 'submit']);
+    Route::post('/contracts/{contract}/milestones/{milestone}/approve', [MilestoneController::class, 'approve']);
+    Route::post('/contracts/{contract}/milestones/{milestone}/revision', [MilestoneController::class, 'revision']);
+    Route::delete('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'destroy']);
 });
 
 
