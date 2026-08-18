@@ -28,8 +28,10 @@ class Job extends Model
         'location_type',
         'location',
         'status',
+        'currency',
         'proposals_count',
         'deadline',
+        'published_at',
     ];
 
     protected $casts = [
@@ -37,7 +39,23 @@ class Job extends Model
         'max_budget' => 'decimal:2',
         'proposals_count' => 'integer',
         'deadline' => 'datetime',
+        'published_at' => 'datetime',
     ];
+
+    /**
+     * New jobs are created in the open (published) state, in Ethiopian Birr.
+     */
+    protected $attributes = [
+        'currency' => 'ETB',
+    ];
+
+    /**
+     * Scope a query to only open (published) jobs.
+     */
+    public function scopeOpen($query)
+    {
+        return $query->where('status', 'open');
+    }
 
     public function employer(): BelongsTo
     {

@@ -1,0 +1,336 @@
+<?php
+
+namespace App\Http\Controllers\Api\V1;
+
+use App\Http\Requests\Api\V1\JobRequest;
+use App\Http\Resources\Api\V1\JobResource;
+use App\Models\Job;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+
+class JobController extends BaseApiController
+{
+    /**
+     * Job statuses the owner may still edit or delete.
+     */
+    private const EDITABLE_STATUSES = ['draft', 'open', 'closed'];
+
+    /**
+     * Allowed job status transitions (Stage 13: close / reopen).
+     */
+    private const STATUS_TRANSITIONS = [
+        'open' => ['closed'],
+        'closed' => ['open'],
+    ];
+
+    /**
+     * Browse open (published) jobs. Public endpoint with basic filtering.
+     */
+    public function index(Request $request): JsonResponse
+    {
+        $jobs = Job::query()
+            ->with(['category', 'skills', 'employer'])
+            ->open()
+            ->when($request->filled('search'), function ($query) use ($request) {
+                $search = $request->input('search');
+
+                return $query->where(function ($query) use ($search) {
+                    $query->where('title', 'like', "%{$search}%")
+                        ->orWhere('description', 'like', "%{$search}%");
+                });
+            })
+            ->when($request->filled('category_id'), fn ($query) => $query->where('category_id', $request->input('category_id')))
+            ->when($request->filled('budget_type'), fn ($query) => $query->where('budget_type', $request->input('budget_type')))
+            ->when($request->filled('experience_level'), fn ($query) => $query->where('experience_level', $request->input('experience_level')))
+            ->when($request->filled('location_type'), fn ($query) => $query->where('location_type', $request->input('location_type')))
+            ->when($request->filled('location'), fn ($query) => $query->where('location', 'like', '%' . $request->input('location') . '%'))
+            ->when($request->filled('min_budget'), fn ($query) => $query->where('max_budget', '>=', $request->input('min_budget')))
+            ->when($request->filled('max_budget'), fn ($query) => $query->where('min_budget', '<=', $request->input('max_budget')))
+            ->orderByDesc('created_at')
+            ->paginate(15);
+
+        return $this->sendResponse(
+            JobResource::collection($jobs),
+            'Jobs retrieved successfully.',
+            200,
+            $this->paginationMeta($jobs)
+        );
+    }
+
+    /**
+     * Show a single job. Open jobs are public; owners and admins may view any status.
+     */
+    public function show(Request $request, Job $job): JsonResponse
+    {
+        $job->load(['category', 'skills', 'employer']);
+
+        if ($job->status !== 'open') {
+            $user = $request->user();
+
+            if (!$user || ($user->id !== $job->employer_id && $user->role !== 'admin')) {
+                return $this->sendError('Job not found.', [], 404);
+            }
+        }
+
+        return $this->sendResponse(
+            new JobResource($job),
+            'Job retrieved successfully.'
+        );
+    }
+
+    /**
+     * Employer lists their own jobs (all statuses); admins see all jobs.
+     */
+    public function mine(Request $request): JsonResponse
+    {
+        $guard = $this->requireEmployer($request);
+        if ($guard) {
+            return $guard;
+        }
+
+        $jobs = Job::with(['category', 'skills', 'employer'])
+            ->when($request->user()->role !== 'admin', fn ($query) => $query->where('employer_id', $request->user()->id))
+            ->orderByDesc('created_at')
+            ->paginate(15);
+
+        return $this->sendResponse(
+            JobResource::collection($jobs),
+            'Your jobs retrieved successfully.',
+            200,
+            $this->paginationMeta($jobs)
+        );
+    }
+
+    /**
+     * Employer creates a job. New jobs are published (open) immediately.
+     */
+    public function store(JobRequest $request): JsonResponse
+    {
+        $guard = $this->requireEmployer($request);
+        if ($guard) {
+            return $guard;
+        }
+
+        $validated = $request->validated();
+        $skills = $validated['skills'] ?? [];
+        unset($validated['skills']);
+
+        $job = DB::transaction(function () use ($request, $validated, $skills) {
+            $job = Job::create(array_merge($validated, [
+                'employer_id' => $request->user()->id,
+                'slug' => $this->uniqueSlug($validated['title']),
+                'status' => 'open',
+                'published_at' => now(),
+            ]));
+
+            if (!empty($skills)) {
+                $job->skills()->sync($skills);
+            }
+
+            return $job;
+        });
+
+        $job->load(['category', 'skills', 'employer']);
+
+        return $this->sendResponse(
+            new JobResource($job),
+            'Job created successfully.',
+            201
+        );
+    }
+
+    /**
+     * Employer updates their own job while it is draft, open or closed.
+     */
+    public function update(JobRequest $request, Job $job): JsonResponse
+    {
+        $guard = $this->requireEmployer($request);
+        if ($guard) {
+            return $guard;
+        }
+
+        $job = $this->loadOwnedJob($request, $job);
+        if ($job instanceof JsonResponse) {
+            return $job;
+        }
+
+        if (!in_array($job->status, self::EDITABLE_STATUSES, true)) {
+            return $this->sendError(
+                "Only draft, open or closed jobs can be updated. Current status: '{$job->status}'.",
+                [],
+                422
+            );
+        }
+
+        $validated = $request->validated();
+        $skills = $validated['skills'] ?? null;
+        unset($validated['skills']);
+
+        DB::transaction(function () use ($job, $validated, $skills) {
+            $job->update($validated);
+
+            if (!is_null($skills)) {
+                $job->skills()->sync($skills);
+            }
+        });
+
+        $job->load(['category', 'skills', 'employer']);
+
+        return $this->sendResponse(
+            new JobResource($job->fresh()),
+            'Job updated successfully.'
+        );
+    }
+
+    /**
+     * Employer deletes their own job (no proposals, not in progress/completed/cancelled).
+     */
+    public function destroy(Request $request, Job $job): JsonResponse
+    {
+        $guard = $this->requireEmployer($request);
+        if ($guard) {
+            return $guard;
+        }
+
+        $job = $this->loadOwnedJob($request, $job);
+        if ($job instanceof JsonResponse) {
+            return $job;
+        }
+
+        if (!in_array($job->status, self::EDITABLE_STATUSES, true)) {
+            return $this->sendError(
+                "Only draft, open or closed jobs can be deleted. Current status: '{$job->status}'.",
+                [],
+                422
+            );
+        }
+
+        if ($job->proposals()->exists()) {
+            return $this->sendError('Jobs with proposals cannot be deleted.', [], 422);
+        }
+
+        DB::transaction(function () use ($job) {
+            $job->delete();
+        });
+
+        return $this->sendResponse(null, 'Job deleted successfully.');
+    }
+
+    /**
+     * Employer closes their open job (no longer visible to job seekers).
+     */
+    public function close(Request $request, Job $job): JsonResponse
+    {
+        return $this->changeStatus($request, $job, 'closed');
+    }
+
+    /**
+     * Employer reopens their closed job (republished as open).
+     */
+    public function reopen(Request $request, Job $job): JsonResponse
+    {
+        return $this->changeStatus($request, $job, 'open');
+    }
+
+    /**
+     * Apply a guarded status change using the allowed transitions table.
+     */
+    private function changeStatus(Request $request, Job $job, string $newStatus): JsonResponse
+    {
+        $guard = $this->requireEmployer($request);
+        if ($guard) {
+            return $guard;
+        }
+
+        $job = $this->loadOwnedJob($request, $job);
+        if ($job instanceof JsonResponse) {
+            return $job;
+        }
+
+        if ($job->status === $newStatus) {
+            return $this->sendError("Job is already '{$job->status}'.", [], 422);
+        }
+
+        if (!in_array($job->status, self::STATUS_TRANSITIONS[$newStatus] ?? [], true)) {
+            return $this->sendError(
+                "Job cannot be moved from '{$job->status}' to '{$newStatus}'.",
+                [],
+                422
+            );
+        }
+
+        DB::transaction(function () use ($job, $newStatus) {
+            $job->update([
+                'status' => $newStatus,
+                'published_at' => $newStatus === 'open' ? now() : $job->published_at,
+            ]);
+        });
+
+        $job->load(['category', 'skills', 'employer']);
+
+        return $this->sendResponse(
+            new JobResource($job->fresh()),
+            $newStatus === 'closed' ? 'Job closed successfully.' : 'Job reopened successfully.'
+        );
+    }
+
+    /**
+     * Only employers and admins may create/update/close/reopen/delete jobs.
+     */
+    private function requireEmployer(Request $request): ?JsonResponse
+    {
+        $user = $request->user();
+
+        if ($user->role !== 'employer' && $user->role !== 'admin') {
+            return $this->sendForbidden('Only employers can manage jobs.');
+        }
+
+        return null;
+    }
+
+    /**
+     * Ensure the job belongs to the authenticated user (admins bypass).
+     */
+    private function loadOwnedJob(Request $request, Job $job): Job|JsonResponse
+    {
+        $user = $request->user();
+
+        if ($job->employer_id !== $user->id && $user->role !== 'admin') {
+            return $this->sendForbidden('You do not have access to this job.');
+        }
+
+        return $job;
+    }
+
+    /**
+     * Build a unique URL slug from the title.
+     */
+    private function uniqueSlug(string $title): string
+    {
+        $slug = Str::slug($title);
+
+        if (Job::where('slug', $slug)->exists()) {
+            $slug .= '-' . Str::lower(Str::random(6));
+        }
+
+        return $slug;
+    }
+
+    /**
+     * Extract pagination info for the response meta.
+     *
+     * @return array<string, mixed>
+     */
+    private function paginationMeta(LengthAwarePaginator $paginator): array
+    {
+        return [
+            'current_page' => $paginator->currentPage(),
+            'last_page' => $paginator->lastPage(),
+            'per_page' => $paginator->perPage(),
+            'total' => $paginator->total(),
+        ];
+    }
+}

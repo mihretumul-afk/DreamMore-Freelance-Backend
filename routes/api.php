@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\FreelancerProfileController;
 use App\Http\Controllers\Api\V1\EmployerProfileController;
 use App\Http\Controllers\Api\V1\ContractController;
 use App\Http\Controllers\Api\V1\MilestoneController;
+use App\Http\Controllers\Api\V1\JobController;
 
 /*
 |--------------------------------------------------------------------------
@@ -62,6 +63,22 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/contracts/{contract}/milestones/{milestone}/approve', [MilestoneController::class, 'approve']);
     Route::post('/contracts/{contract}/milestones/{milestone}/revision', [MilestoneController::class, 'revision']);
     Route::delete('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'destroy']);
+});
+
+// Stage 13 — Job Posting & Management
+// Public job browsing (open jobs only).
+Route::get('/jobs', [JobController::class, 'index']);
+Route::get('/jobs/{job}', [JobController::class, 'show']);
+
+// Authenticated job management (employer/admin).
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/employer/jobs', [JobController::class, 'mine']);
+
+    Route::post('/jobs', [JobController::class, 'store']);
+    Route::put('/jobs/{job}', [JobController::class, 'update']);
+    Route::delete('/jobs/{job}', [JobController::class, 'destroy']);
+    Route::post('/jobs/{job}/close', [JobController::class, 'close']);
+    Route::post('/jobs/{job}/reopen', [JobController::class, 'reopen']);
 });
 
 
