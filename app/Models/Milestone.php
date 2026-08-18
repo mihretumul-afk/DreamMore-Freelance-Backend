@@ -17,11 +17,22 @@ class Milestone extends Model
         'amount',
         'status',
         'due_date',
+        'submitted_at',
+        'approved_at',
+    ];
+
+    /**
+     * New milestones are created in the pending state.
+     */
+    protected $attributes = [
+        'status' => 'pending',
     ];
 
     protected $casts = [
         'amount' => 'decimal:2',
         'due_date' => 'datetime',
+        'submitted_at' => 'datetime',
+        'approved_at' => 'datetime',
     ];
 
     public function contract(): BelongsTo
