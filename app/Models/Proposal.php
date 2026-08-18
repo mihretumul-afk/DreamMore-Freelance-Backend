@@ -16,6 +16,7 @@ class Proposal extends Model
         'freelancer_id',
         'cover_letter',
         'bid_amount',
+        'currency',
         'estimated_duration',
         'status',
     ];
@@ -23,6 +24,22 @@ class Proposal extends Model
     protected $casts = [
         'bid_amount' => 'decimal:2',
     ];
+
+    /**
+     * New proposals start as pending, in Ethiopian Birr.
+     */
+    protected $attributes = [
+        'currency' => 'ETB',
+        'status' => 'pending',
+    ];
+
+    /**
+     * Scope a query to active (not yet rejected or withdrawn) proposals.
+     */
+    public function scopeActive($query)
+    {
+        return $query->whereIn('status', ['pending', 'shortlisted']);
+    }
 
     public function job(): BelongsTo
     {

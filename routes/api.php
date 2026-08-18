@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\V1\EmployerProfileController;
 use App\Http\Controllers\Api\V1\ContractController;
 use App\Http\Controllers\Api\V1\MilestoneController;
 use App\Http\Controllers\Api\V1\JobController;
+use App\Http\Controllers\Api\V1\ProposalController;
 
 /*
 |--------------------------------------------------------------------------
@@ -79,6 +80,25 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/jobs/{job}', [JobController::class, 'destroy']);
     Route::post('/jobs/{job}/close', [JobController::class, 'close']);
     Route::post('/jobs/{job}/reopen', [JobController::class, 'reopen']);
+});
+
+// Stage 14 — Proposals & Bidding
+Route::middleware('auth:sanctum')->group(function () {
+    // Freelancer's own proposals
+    Route::get('/proposals', [ProposalController::class, 'index']);
+    Route::get('/proposals/{proposal}', [ProposalController::class, 'show']);
+    Route::put('/proposals/{proposal}', [ProposalController::class, 'update']);
+    Route::post('/proposals/{proposal}/withdraw', [ProposalController::class, 'withdraw']);
+
+    // Freelancer submits a proposal for a job
+    Route::post('/jobs/{job}/proposals', [ProposalController::class, 'store']);
+
+    // Employer proposal management (own jobs only)
+    Route::get('/jobs/{job}/proposals', [ProposalController::class, 'jobProposals']);
+    Route::get('/jobs/{job}/proposals/{proposal}', [ProposalController::class, 'showJobProposal']);
+    Route::post('/jobs/{job}/proposals/{proposal}/shortlist', [ProposalController::class, 'shortlist']);
+    Route::post('/jobs/{job}/proposals/{proposal}/reject', [ProposalController::class, 'reject']);
+    Route::post('/jobs/{job}/proposals/{proposal}/accept', [ProposalController::class, 'accept']);
 });
 
 
