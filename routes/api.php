@@ -1,14 +1,16 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
-use App\Http\Controllers\Api\V1\FreelancerProfileController;
-use App\Http\Controllers\Api\V1\EmployerProfileController;
+use App\Http\Controllers\Api\V1\CategoryController;
 use App\Http\Controllers\Api\V1\ContractController;
-use App\Http\Controllers\Api\V1\MilestoneController;
+use App\Http\Controllers\Api\V1\EmployerProfileController;
+use App\Http\Controllers\Api\V1\FreelancerProfileController;
+use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\JobController;
+use App\Http\Controllers\Api\V1\MilestoneController;
 use App\Http\Controllers\Api\V1\ProposalController;
+use App\Http\Controllers\Api\V1\SkillController;
+use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
@@ -21,8 +23,13 @@ Route::get('/health', [HealthController::class, 'health']);
 Route::get('/status', [HealthController::class, 'status']);
 
 // Public Profiles
+Route::get('/freelancers', [FreelancerProfileController::class, 'index']);
 Route::get('/freelancers/{id}', [FreelancerProfileController::class, 'showPublic']);
 Route::get('/employers/{id}', [EmployerProfileController::class, 'showPublic']);
+
+// Marketplace Catalog (public, read-only)
+Route::get('/categories', [CategoryController::class, 'index']);
+Route::get('/skills', [SkillController::class, 'index']);
 
 // Authentication Routes
 Route::prefix('auth')->group(function () {
@@ -101,7 +108,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/jobs/{job}/proposals/{proposal}/accept', [ProposalController::class, 'accept']);
 });
 
-
 // Role-Protected Test Authorization Endpoints
 Route::middleware(['auth:sanctum'])->group(function () {
     Route::middleware('role:freelancer')->get('/freelancer/dashboard-test', function () {
@@ -117,3 +123,67 @@ Route::middleware(['auth:sanctum'])->group(function () {
     });
 });
 
+/*
+|--------------------------------------------------------------------------
+| Admin Routes — /api/v1/admin/*
+|--------------------------------------------------------------------------
+|
+| All admin endpoints require authentication + role=admin.
+| The existing EnsureRole middleware already returns 403 for wrong roles.
+|
+*/
+
+use App\Http\Controllers\Api\V1\Admin\DashboardController;
+use App\Http\Controllers\Api\V1\Admin\UserController;
+use App\Http\Controllers\Api\V1\Admin\VerificationController;
+use App\Http\Controllers\Api\V1\Admin\JobController as AdminJobController;
+use App\Http\Controllers\Api\V1\Admin\ReportController;
+use App\Http\Controllers\Api\V1\Admin\CategoryController as AdminCategoryController;
+use App\Http\Controllers\Api\V1\Admin\SkillController as AdminSkillController;
+use App\Http\Controllers\Api\V1\Admin\SettingController;
+
+Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(function () {
+    // Dashboard
+    Route::get('/dashboard', [DashboardController::class, 'index']);
+
+    // User management
+    Route::get('/users', [UserController::class, 'index']);
+    Route::get('/users/{user}', [UserController::class, 'show']);
+    Route::put('/users/{user}/status', [UserController::class, 'updateStatus']);
+    Route::put('/users/{user}/role', [UserController::class, 'updateRole']);
+    Route::delete('/users/{user}', [UserController::class, 'destroy']);
+
+    // Verification management
+    Route::get('/verifications', [VerificationController::class, 'index']);
+    Route::get('/verifications/{verification}', [VerificationController::class, 'show']);
+    Route::put('/verifications/{verification}/approve', [VerificationController::class, 'approve']);
+    Route::put('/verifications/{verification}/reject', [VerificationController::class, 'reject']);
+
+    // Job moderation
+    Route::get('/jobs', [AdminJobController::class, 'index']);
+    Route::put('/jobs/{job}/status', [AdminJobController::class, 'moderate']);
+    Route::delete('/jobs/{job}', [AdminJobController::class, 'destroy']);
+
+    // Reports management
+    Route::get('/reports', [ReportController::class, 'index']);
+    Route::get('/reports/{report}', [ReportController::class, 'show']);
+    Route::put('/reports/{report}/resolve', [ReportController::class, 'resolve']);
+    Route::delete('/reports/{report}', [ReportController::class, 'dismiss']);
+    Route::delete('/reports/{report}/delete', [ReportController::class, 'destroy']);
+
+    // Category management
+    Route::get('/categories', [AdminCategoryController::class, 'index']);
+    Route::post('/categories', [AdminCategoryController::class, 'store']);
+    Route::put('/categories/{category}', [AdminCategoryController::class, 'update']);
+    Route::delete('/categories/{category}', [AdminCategoryController::class, 'destroy']);
+
+    // Skill management
+    Route::get('/skills', [AdminSkillController::class, 'index']);
+    Route::post('/skills', [AdminSkillController::class, 'store']);
+    Route::put('/skills/{skill}', [AdminSkillController::class, 'update']);
+    Route::delete('/skills/{skill}', [AdminSkillController::class, 'destroy']);
+
+    // Platform settings
+    Route::get('/settings', [SettingController::class, 'index']);
+    Route::put('/settings', [SettingController::class, 'update']);
+});
