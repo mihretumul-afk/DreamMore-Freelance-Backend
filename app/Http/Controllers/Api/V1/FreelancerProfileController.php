@@ -16,6 +16,10 @@ class FreelancerProfileController extends BaseApiController
      * Discover freelancers. Public endpoint with search, filtering, sorting
      * and pagination. Only public profile data is returned.
      */
+    /**
+     * Discover freelancers. Public endpoint with search, filtering, sorting
+     * and pagination. Only public profile data is returned.
+     */
     public function index(Request $request): JsonResponse
     {
         $request->validate([
@@ -26,6 +30,10 @@ class FreelancerProfileController extends BaseApiController
             'max_hourly_rate' => ['nullable', 'numeric', 'min:0'],
             'experience_level' => ['nullable', 'in:entry,intermediate,expert'],
             'availability_status' => ['nullable', 'in:available,busy,not_available'],
+            'location' => ['nullable', 'string'],
+            'min_rating' => ['nullable', 'numeric', 'min:0', 'max:5'],
+            'sort' => ['nullable', 'string'],
+            'direction' => ['nullable', 'string', 'in:asc,desc'],
         ]);
 
         $search = $request->input('search');
@@ -46,14 +54,13 @@ class FreelancerProfileController extends BaseApiController
             ->when($request->filled('experience_level'), fn ($query) => $query->where('experience_level', $request->input('experience_level')))
             ->when($request->filled('availability_status'), fn ($query) => $query->where('availability_status', $request->input('availability_status')))
             ->when($request->filled('min_hourly_rate'), fn ($query) => $query->where('hourly_rate', '>=', $request->input('min_hourly_rate')))
-            ->when($request->filled('max_hourly_rate'), fn ($query) => $query->where('hourly_rate', '<=', $request->input('max_hourly_rate')));
+            ->when($request->filled('max_hourly_rate'), fn ($query) => $query->where('hourly_rate', '<=', $request->input('max_hourly_rate')))
+            ->when($request->filled('location'), fn ($query) => $query->where('location', 'like', '%' . $request->input('location') . '%'))
+            ->when($request->filled('min_rating'), fn ($query) => $query->where('rating', '>=', $request->input('min_rating')));
 
-        // Sorting: rating desc by default; also support created_at / hourly_rate.
-        $sort = $request->input('sort', 'rating');
-        $direction = $request->input('direction', 'desc') === 'asc' ? 'asc' : 'desc';
-        $sortable = ['rating', 'created_at', 'hourly_rate'];
-        $sort = in_array($sort, $sortable, true) ? $sort : 'rating';
-        $query->orderBy($sort, $direction);
+        // Sorting: rating desc by default; also support hourly_rate, created_at, experience, completed_jobs.
+        $sort = $this->resolveSort($request);
+        $query->orderBy($sort[0], $sort[1]);
 
         $perPage = $request->input('per_page', 15);
         $freelancers = $query->paginate($perPage);
@@ -64,6 +71,25 @@ class FreelancerProfileController extends BaseApiController
             200,
             $this->paginationMeta($freelancers)
         );
+    }
+
+    /**
+     * Resolve the sort column and direction from the request.
+     *
+     * @return array{string, string}
+     */
+    private function resolveSort(Request $request): array
+    {
+        $sort = $request->input('sort', 'rating');
+        $direction = $request->input('direction', 'desc') === 'asc' ? 'asc' : 'desc';
+
+        return match ($sort) {
+            'hourly_rate' => ['hourly_rate', $direction],
+            'newest', 'created_at' => ['created_at', $direction],
+            'experience', 'experience_level' => ['experience_level', $direction],
+            'completed_jobs', 'completed_jobs_count' => ['completed_jobs_count', $direction],
+            default => ['rating', 'desc'],
+        };
     }
 
     /**

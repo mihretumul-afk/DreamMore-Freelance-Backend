@@ -141,6 +141,14 @@ use App\Http\Controllers\Api\V1\Admin\ReportController;
 use App\Http\Controllers\Api\V1\Admin\CategoryController as AdminCategoryController;
 use App\Http\Controllers\Api\V1\Admin\SkillController as AdminSkillController;
 use App\Http\Controllers\Api\V1\Admin\SettingController;
+use App\Http\Controllers\Api\V1\AvatarController;
+use App\Http\Controllers\Api\V1\CredentialController;
+use App\Http\Controllers\Api\V1\MessageController;
+use App\Http\Controllers\Api\V1\NotificationController;
+use App\Http\Controllers\Api\V1\ReviewController;
+use App\Http\Controllers\Api\V1\SavedJobController;
+use App\Http\Controllers\Api\V1\SavedFreelancerController;
+use App\Http\Controllers\Api\V1\RecommendationController;
 
 Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(function () {
     // Dashboard
@@ -158,6 +166,12 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     Route::get('/verifications/{verification}', [VerificationController::class, 'show']);
     Route::put('/verifications/{verification}/approve', [VerificationController::class, 'approve']);
     Route::put('/verifications/{verification}/reject', [VerificationController::class, 'reject']);
+
+    // Credential management
+    Route::get('/credentials/{credential}', [VerificationController::class, 'showCredential']);
+    Route::get('/credentials/{credential}/download', [VerificationController::class, 'downloadCredential']);
+    Route::put('/credentials/{credential}/approve', [VerificationController::class, 'approveCredential']);
+    Route::put('/credentials/{credential}/reject', [VerificationController::class, 'rejectCredential']);
 
     // Job moderation
     Route::get('/jobs', [AdminJobController::class, 'index']);
@@ -186,4 +200,88 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     // Platform settings
     Route::get('/settings', [SettingController::class, 'index']);
     Route::put('/settings', [SettingController::class, 'update']);
+});
+
+// Avatar management (all authenticated users)
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/avatar', [AvatarController::class, 'store']);
+    Route::delete('/avatar', [AvatarController::class, 'destroy']);
+});
+
+// Credential management (freelancers)
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/credentials', [CredentialController::class, 'index']);
+    Route::post('/credentials', [CredentialController::class, 'store']);
+    Route::get('/credentials/{credential}', [CredentialController::class, 'show']);
+    Route::put('/credentials/{credential}', [CredentialController::class, 'update']);
+    Route::delete('/credentials/{credential}', [CredentialController::class, 'destroy']);
+    Route::get('/credentials/{credential}/download', [CredentialController::class, 'download']);
+});
+
+// Public verified credentials for a freelancer
+Route::get('/freelancers/{userId}/credentials', [CredentialController::class, 'publicCredentials']);
+
+// Messaging
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/messages/conversations', [MessageController::class, 'conversations']);
+    Route::get('/messages/unread', [MessageController::class, 'unreadCount']);
+    Route::get('/messages/{userId}', [MessageController::class, 'messages']);
+    Route::post('/messages', [MessageController::class, 'store']);
+    Route::put('/messages/{message}/read', [MessageController::class, 'markRead']);
+    Route::put('/messages/{userId}/read-all', [MessageController::class, 'markAllRead']);
+});
+
+// Notifications
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/notifications', [NotificationController::class, 'index']);
+    Route::put('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
+    Route::put('/notifications/read-all', [NotificationController::class, 'markAllRead']);
+    Route::get('/notifications/unread', [NotificationController::class, 'unreadCount']);
+});
+
+// Reviews
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/contracts/{contract}/review', [ReviewController::class, 'store']);
+});
+
+Route::get('/reviews/{review}', [ReviewController::class, 'show']);
+Route::get('/users/{userId}/reviews', [ReviewController::class, 'userReviews']);
+
+// Stage 15 — Saved Jobs & Saved Freelancers
+Route::middleware('auth:sanctum')->group(function () {
+    // Saved Jobs
+    Route::get('/saved-jobs', [SavedJobController::class, 'index']);
+    Route::post('/jobs/{job}/save', [SavedJobController::class, 'save']);
+    Route::get('/jobs/{job}/saved', [SavedJobController::class, 'saved']);
+    Route::delete('/jobs/{job}/save', [SavedJobController::class, 'destroy']);
+
+    // Saved Freelancers
+    Route::get('/saved-freelancers', [SavedFreelancerController::class, 'index']);
+    Route::post('/freelancers/{freelancer}/save', [SavedFreelancerController::class, 'save']);
+    Route::get('/freelancers/{freelancer}/saved', [SavedFreelancerController::class, 'saved']);
+    Route::delete('/freelancers/{freelancer}/save', [SavedFreelancerController::class, 'destroy']);
+});
+
+// Stage 16 — Recommendations
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/recommendations/jobs', [RecommendationController::class, 'jobs']);
+    Route::get('/recommendations/freelancers', [RecommendationController::class, 'freelancers']);
+});
+
+// Stage 19 — LMS Integration & Skill Tests
+use App\Http\Controllers\Api\V1\LmsWebhookController;
+use App\Http\Controllers\Api\V1\SkillTestController;
+
+// LMS webhooks (service-to-service, verified by HMAC signature)
+Route::post('/lms/certificate-completed', [LmsWebhookController::class, 'certificateCompleted']);
+Route::post('/lms/certificate-revoked', [LmsWebhookController::class, 'certificateRevoked']);
+
+// Skill tests (public browse, authenticated take)
+Route::get('/skill-tests', [SkillTestController::class, 'index']);
+Route::get('/skill-tests/{skillTest}', [SkillTestController::class, 'show']);
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/skill-tests/{skillTest}/exemption', [SkillTestController::class, 'checkExemption']);
+    Route::post('/skill-tests/{skillTest}/submit', [SkillTestController::class, 'submit']);
+    Route::get('/my-test-history', [SkillTestController::class, 'history']);
 });

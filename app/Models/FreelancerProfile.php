@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class FreelancerProfile extends Model
 {
@@ -44,5 +45,10 @@ class FreelancerProfile extends Model
         return $this->belongsToMany(Skill::class, 'freelancer_skills')
                     ->withPivot('years_of_experience')
                     ->withTimestamps();
+    }
+
+    public function savedByUsers(): HasMany
+    {
+        return $this->hasMany(SavedFreelancer::class);
     }
 }

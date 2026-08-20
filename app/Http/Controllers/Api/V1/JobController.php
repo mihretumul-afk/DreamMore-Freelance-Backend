@@ -27,10 +27,22 @@ class JobController extends BaseApiController
     ];
 
     /**
-     * Browse open (published) jobs. Public endpoint with basic filtering.
+     * Sortable columns for the public job browse endpoint.
+     */
+    private const SORTABLE = ['created_at', 'max_budget', 'min_budget', 'proposals_count', 'published_at'];
+
+    /**
+     * Browse open (published) jobs. Public endpoint with advanced
+     * filtering, skill search, and sorting.
      */
     public function index(Request $request): JsonResponse
     {
+        $request->validate([
+            'skill_id' => ['nullable', 'integer'],
+            'sort' => ['nullable', 'string', 'in:created_at,budget,newest'],
+            'direction' => ['nullable', 'string', 'in:asc,desc'],
+        ]);
+
         $jobs = Job::query()
             ->with(['category', 'skills', 'employer'])
             ->open()
@@ -39,17 +51,21 @@ class JobController extends BaseApiController
 
                 return $query->where(function ($query) use ($search) {
                     $query->where('title', 'like', "%{$search}%")
-                        ->orWhere('description', 'like', "%{$search}%");
+                        ->orWhere('description', 'like', "%{$search}%")
+                        ->orWhereHas('skills', fn ($skillQuery) => $skillQuery->where('name', 'like', "%{$search}%"))
+                        ->orWhereHas('category', fn ($catQuery) => $catQuery->where('name', 'like', "%{$search}%"));
                 });
             })
             ->when($request->filled('category_id'), fn ($query) => $query->where('category_id', $request->input('category_id')))
+            ->when($request->filled('skill_id'), fn ($query) => $query->whereHas('skills', fn ($skillQuery) => $skillQuery->where('skills.id', $request->input('skill_id'))))
             ->when($request->filled('budget_type'), fn ($query) => $query->where('budget_type', $request->input('budget_type')))
             ->when($request->filled('experience_level'), fn ($query) => $query->where('experience_level', $request->input('experience_level')))
             ->when($request->filled('location_type'), fn ($query) => $query->where('location_type', $request->input('location_type')))
             ->when($request->filled('location'), fn ($query) => $query->where('location', 'like', '%' . $request->input('location') . '%'))
             ->when($request->filled('min_budget'), fn ($query) => $query->where('max_budget', '>=', $request->input('min_budget')))
             ->when($request->filled('max_budget'), fn ($query) => $query->where('min_budget', '<=', $request->input('max_budget')))
-            ->orderByDesc('created_at')
+            ->when($request->filled('status'), fn ($query) => $query->where('status', $request->input('status')))
+            ->orderBy(...$this->resolveSort($request))
             ->paginate(15);
 
         return $this->sendResponse(
@@ -58,6 +74,24 @@ class JobController extends BaseApiController
             200,
             $this->paginationMeta($jobs)
         );
+    }
+
+    /**
+     * Resolve the sort column and direction from the request.
+     * 'budget' maps to max_budget (descending shows highest-paying first).
+     * 'newest' is an alias for created_at desc.
+     *
+     * @return array{string, string}
+     */
+    private function resolveSort(Request $request): array
+    {
+        $sort = $request->input('sort', 'newest');
+        $direction = $request->input('direction', 'desc') === 'asc' ? 'asc' : 'desc';
+
+        return match ($sort) {
+            'budget' => ['max_budget', $direction],
+            default => ['created_at', 'desc'],
+        };
     }
 
     /**

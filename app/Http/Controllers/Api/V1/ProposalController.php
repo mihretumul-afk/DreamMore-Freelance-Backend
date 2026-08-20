@@ -8,6 +8,7 @@ use App\Http\Resources\Api\V1\ProposalResource;
 use App\Models\Contract;
 use App\Models\Job;
 use App\Models\Proposal;
+use App\Services\NotificationService;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -99,6 +100,14 @@ class ProposalController extends BaseApiController
 
             return $proposal;
         });
+
+        // Notify the employer about the new proposal
+        NotificationService::newProposal(
+            $job->employer_id,
+            $request->user()->name,
+            $job->title,
+            $job->id
+        );
 
         $proposal->load(['job', 'freelancer']);
 
@@ -263,6 +272,14 @@ class ProposalController extends BaseApiController
 
         $proposal->update(['status' => 'shortlisted']);
 
+        // Notify the freelancer
+        NotificationService::proposalStatusChanged(
+            $proposal->freelancer_id,
+            'shortlisted',
+            $job->title,
+            $job->id
+        );
+
         $proposal->load(['job', 'freelancer']);
         $proposal->refresh();
 
@@ -301,6 +318,14 @@ class ProposalController extends BaseApiController
         }
 
         $proposal->update(['status' => 'rejected']);
+
+        // Notify the freelancer
+        NotificationService::proposalStatusChanged(
+            $proposal->freelancer_id,
+            'rejected',
+            $job->title,
+            $job->id
+        );
 
         $proposal->load(['job', 'freelancer']);
         $proposal->refresh();
@@ -367,6 +392,27 @@ class ProposalController extends BaseApiController
                 $job->update(['status' => 'in_progress']);
             }
         });
+
+        // Notify the freelancer about acceptance
+        NotificationService::proposalStatusChanged(
+            $proposal->freelancer_id,
+            'accepted',
+            $job->title,
+            $job->id
+        );
+
+        // Notify about contract creation to both parties
+        NotificationService::contractCreated(
+            $proposal->freelancer_id,
+            $job->title,
+            'freelancer'
+        );
+
+        NotificationService::contractCreated(
+            $job->employer_id,
+            $job->title,
+            'employer'
+        );
 
         $proposal->load(['job', 'freelancer', 'contract']);
         $proposal->refresh();

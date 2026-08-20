@@ -7,6 +7,7 @@ use App\Http\Requests\Api\V1\MilestoneSubmissionRequest;
 use App\Http\Resources\Api\V1\MilestoneResource;
 use App\Models\Contract;
 use App\Models\Milestone;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -171,6 +172,14 @@ class MilestoneController extends BaseApiController
             ]);
         });
 
+        // Notify the employer
+        NotificationService::milestoneSubmitted(
+            $contract->employer_id,
+            $milestone->title,
+            $contract->title,
+            $contract->id
+        );
+
         return $this->sendResponse(
             new MilestoneResource($milestone->fresh()),
             'Milestone submitted for review.'
@@ -216,6 +225,14 @@ class MilestoneController extends BaseApiController
             ]);
         });
 
+        // Notify the freelancer
+        NotificationService::milestoneApproved(
+            $contract->freelancer_id,
+            $milestone->title,
+            $contract->title,
+            $contract->id
+        );
+
         return $this->sendResponse(
             new MilestoneResource($milestone->fresh()),
             'Milestone approved successfully.'
@@ -260,6 +277,14 @@ class MilestoneController extends BaseApiController
                 'submitted_at' => null,
             ]);
         });
+
+        // Notify the freelancer about revision request
+        NotificationService::milestoneRevision(
+            $contract->freelancer_id,
+            $milestone->title,
+            $contract->title,
+            $contract->id
+        );
 
         return $this->sendResponse(
             new MilestoneResource($milestone->fresh()),

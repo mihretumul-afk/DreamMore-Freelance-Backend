@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\Verification;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -14,6 +15,11 @@ class EmployerProfileResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
+        // Get the latest verification status for the employer
+        $verification = Verification::where('user_id', $this->user_id)
+            ->orderByDesc('created_at')
+            ->first();
+
         return [
             'id' => $this->id,
             'user_id' => $this->user_id,
@@ -36,6 +42,7 @@ class EmployerProfileResource extends JsonResource
             'total_spent' => (float) ($this->total_spent ?? 0),
             'posted_jobs_count' => (int) ($this->posted_jobs_count ?? 0),
             'rating' => $this->rating ? (float) $this->rating : 0.0,
+            'verification_status' => $verification ? $verification->status : null,
             'created_at' => $this->created_at?->toISOString(),
             'updated_at' => $this->updated_at?->toISOString(),
         ];

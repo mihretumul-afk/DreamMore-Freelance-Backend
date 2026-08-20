@@ -50,7 +50,9 @@ return [
     |
     */
 
-    'expiration' => null,
+    // Token expiration: 24 hours (1440 minutes).
+    // Expired tokens are rejected with 401; the frontend clears the session.
+    'expiration' => 1440,
 
     /*
     |--------------------------------------------------------------------------

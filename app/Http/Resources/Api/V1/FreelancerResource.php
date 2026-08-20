@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\Api\V1;
 
+use App\Models\Credential;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -43,6 +44,12 @@ class FreelancerResource extends JsonResource
                     ];
                 })->values();
             }),
+            // Only show verified credential metadata publicly — no file paths
+            'verified_credentials' => Credential::where('user_id', $this->user_id)
+                ->where('status', 'approved')
+                ->select('id', 'title', 'type', 'issuing_organization')
+                ->orderByDesc('created_at')
+                ->get(),
             'created_at' => $this->created_at?->toISOString(),
             'updated_at' => $this->updated_at?->toISOString(),
         ];
