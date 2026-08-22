@@ -217,10 +217,12 @@ class MilestoneTest extends TestCase
         ]);
 
         $response = $this->actingAsSanctum($data['employer'])
-            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/revision');
+            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/revision', [
+                'revision_note' => 'Please revise this section.',
+            ]);
 
         $response->assertStatus(200);
-        $this->assertEquals('in_progress', $response->json('data.status'));
+        $this->assertEquals('revision_requested', $response->json('data.status'));
         $this->assertNull($response->json('data.submitted_at'));
     }
 
@@ -367,11 +369,13 @@ class MilestoneTest extends TestCase
             ->assertStatus(200)
             ->assertJsonPath('data.status', 'submitted');
 
-        // Employer requests revision -> back to in_progress.
+        // Employer requests revision -> status becomes revision_requested.
         $this->actingAsSanctum($data['employer'])
-            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/revision')
+            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/revision', [
+                'revision_note' => 'Please update responsive styles.',
+            ])
             ->assertStatus(200)
-            ->assertJsonPath('data.status', 'in_progress');
+            ->assertJsonPath('data.status', 'revision_requested');
 
         // Freelancer submits again.
         $this->actingAsSanctum($data['freelancer'])

@@ -86,4 +86,20 @@ class NotificationController extends BaseApiController
 
         return $this->sendResponse(['unread_count' => $count], 'Unread count retrieved.');
     }
+
+    /**
+     * Delete a specific notification for the authenticated user.
+     */
+    public function destroy(Request $request, Notification $notification): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($notification->user_id !== $user->id) {
+            return $this->sendForbidden('You can only delete your own notifications.');
+        }
+
+        $notification->delete();
+
+        return $this->sendResponse(null, 'Notification deleted successfully.');
+    }
 }

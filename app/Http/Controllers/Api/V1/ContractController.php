@@ -4,6 +4,10 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Resources\Api\V1\ContractResource;
 use App\Models\Contract;
+use App\Models\EmployerProfile;
+use App\Models\FreelancerProfile;
+use App\Models\Report;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -15,14 +19,16 @@ class ContractController extends BaseApiController
      * Terminal states (completed/cancelled) are not present as sources.
      */
     private const TRANSITIONS = [
-        'active' => ['paused', 'completed', 'cancelled'],
-        'paused' => ['active', 'cancelled'],
+        'active' => ['paused', 'completed', 'cancelled', 'disputed'],
+        'paused' => ['active', 'cancelled', 'disputed'],
+        'disputed' => ['active', 'completed', 'cancelled'],
     ];
 
     private const ACTION_MESSAGES = [
         'paused' => 'Contract paused successfully.',
         'active' => 'Contract resumed successfully.',
         'cancelled' => 'Contract cancelled successfully.',
+        'disputed' => 'Contract placed in dispute.',
     ];
 
     /**
@@ -115,7 +121,29 @@ class ContractController extends BaseApiController
                 'status' => 'completed',
                 'end_date' => now(),
             ]);
+
+            // Update associated job status
+            if ($contract->job) {
+                $contract->job->update(['status' => 'completed']);
+            }
+
+            // Update freelancer profile stats
+            $freelancerProfile = FreelancerProfile::where('user_id', $contract->freelancer_id)->first();
+            if ($freelancerProfile) {
+                $freelancerProfile->increment('completed_jobs_count');
+                $freelancerProfile->increment('total_earnings', (float) $contract->total_amount);
+            }
+
+            // Update employer profile stats
+            $employerProfile = EmployerProfile::where('user_id', $contract->employer_id)->first();
+            if ($employerProfile) {
+                $employerProfile->increment('total_spent', (float) $contract->total_amount);
+            }
         });
+
+        // Notify both parties
+        NotificationService::contractCompleted($contract->freelancer_id, $contract->title, 'freelancer');
+        NotificationService::contractCompleted($contract->employer_id, $contract->title, 'employer');
 
         $contract->refresh()->load(['job', 'employer', 'freelancer', 'milestones']);
 
@@ -128,6 +156,61 @@ class ContractController extends BaseApiController
     public function cancel(Request $request, Contract $contract): JsonResponse
     {
         return $this->changeStatus($request, $contract, 'cancelled');
+    }
+
+    /**
+     * Raise a dispute on a contract. Available to either contract participant.
+     */
+    public function dispute(Request $request, Contract $contract): JsonResponse
+    {
+        $user = $request->user();
+
+        $contract = $this->loadOwnedContract($request, $contract);
+        if ($contract instanceof JsonResponse) {
+            return $contract;
+        }
+
+        if (!in_array($contract->status, ['active', 'paused'], true)) {
+            return $this->sendError("Only active or paused contracts can be disputed. Current status: '{$contract->status}'.", [], 422);
+        }
+
+        $validated = $request->validate([
+            'reason' => 'required|string|max:255',
+            'description' => 'nullable|string|max:5000',
+        ]);
+
+        DB::transaction(function () use ($contract, $user, $validated) {
+            $contract->update(['status' => 'disputed']);
+
+            Report::create([
+                'reporter_id' => $user->id,
+                'target_type' => 'contract',
+                'target_id' => $contract->id,
+                'reason' => $validated['reason'],
+                'description' => $validated['description'] ?? null,
+                'status' => 'pending',
+            ]);
+        });
+
+        $isEmployer = $contract->employer_id === $user->id;
+        $otherUserId = $isEmployer ? $contract->freelancer_id : $contract->employer_id;
+        $otherUserRole = $isEmployer ? 'freelancer' : 'employer';
+
+        NotificationService::disputeRaised($otherUserId, $contract->title, $contract->id, $otherUserRole);
+
+        NotificationService::notifyAdmins(
+            'admin_contract_disputed',
+            'Contract Dispute Raised',
+            "A dispute was raised on contract '{$contract->title}' by {$user->name}.",
+            '/admin/reports'
+        );
+
+        $contract->refresh()->load(['job', 'employer', 'freelancer', 'milestones']);
+
+        return $this->sendResponse(
+            new ContractResource($contract),
+            'Dispute raised successfully. An administrator has been notified to review the contract.'
+        );
     }
 
     /**
@@ -173,7 +256,7 @@ class ContractController extends BaseApiController
     }
 
     /**
-     * Only employers and admins may manage a contract.
+     * Only employers and admins may manage a contract status transitions.
      */
     private function requireEmployer(Request $request): ?JsonResponse
     {

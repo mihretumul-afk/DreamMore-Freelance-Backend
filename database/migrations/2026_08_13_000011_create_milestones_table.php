@@ -14,7 +14,7 @@ return new class extends Migration
             $table->string('title');
             $table->text('description')->nullable();
             $table->decimal('amount', 10, 2);
-            $table->enum('status', ['pending', 'in_progress', 'submitted', 'approved', 'paid'])->default('pending');
+            $table->enum('status', ['pending', 'in_progress', 'submitted', 'revision_requested', 'approved', 'paid'])->default('pending');
             $table->timestamp('due_date')->nullable();
             $table->timestamps();
 

@@ -57,10 +57,10 @@ class AvatarController extends BaseApiController
         }
 
         $file = $request->file('avatar');
-        $safeName = 'avatars/' . $user->id . '_' . time() . '_' . bin2hex(random_bytes(8)) . '.' . $file->getClientOriginalExtension();
-        $file->storeAs('public', $safeName);
+        $fileName = $user->id . '_' . time() . '_' . bin2hex(random_bytes(8)) . '.' . $file->getClientOriginalExtension();
+        $file->storeAs('avatars', $fileName, 'public');
 
-        $url = Storage::disk('public')->url($safeName);
+        $url = Storage::disk('public')->url('avatars/' . $fileName);
 
         $user->update(['avatar' => $url]);
 

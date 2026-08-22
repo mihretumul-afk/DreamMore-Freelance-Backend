@@ -46,6 +46,7 @@ class JobController extends BaseApiController
         $jobs = Job::query()
             ->with(['category', 'skills', 'employer'])
             ->open()
+            ->whereHas('employer', fn ($empQuery) => $empQuery->where('status', 'active'))
             ->when($request->filled('search'), function ($query) use ($request) {
                 $search = $request->input('search');
 
@@ -95,13 +96,15 @@ class JobController extends BaseApiController
     }
 
     /**
-     * Show a single job. Open jobs are public; owners and admins may view any status.
+     * Show a single job. Open jobs from active employers are public; owners and admins may view any status.
      */
     public function show(Request $request, Job $job): JsonResponse
     {
         $job->load(['category', 'skills', 'employer']);
 
-        if ($job->status !== 'open') {
+        $isPubliclyAvailable = $job->status === 'open' && $job->employer && $job->employer->status === 'active';
+
+        if (! $isPubliclyAvailable) {
             $user = $request->user();
 
             if (!$user || ($user->id !== $job->employer_id && $user->role !== 'admin')) {

@@ -7,6 +7,7 @@ use App\Http\Resources\Api\V1\UserResource;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class UserController extends BaseApiController
 {
@@ -109,7 +110,10 @@ class UserController extends BaseApiController
             return $this->sendError('You cannot delete your own admin account.', [], 422);
         }
 
-        $user->delete();
+        DB::transaction(function () use ($user) {
+            $user->tokens()->delete();
+            $user->delete();
+        });
 
         return $this->sendResponse(null, 'User deleted successfully.');
     }

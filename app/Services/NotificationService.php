@@ -77,12 +77,15 @@ class NotificationService
     public static function contractCreated(int $userId, string $title, string $role): Notification
     {
         $link = $role === 'employer' ? '/employer/contracts' : '/freelancer/contracts';
+        $message = $role === 'employer'
+            ? "Contract created successfully."
+            : "Your proposal was accepted. A contract has been created.";
 
         return self::create(
             $userId,
             'contract_created',
             'Contract Created',
-            "A new contract '{$title}' has been created.",
+            $message,
             $link
         );
     }
@@ -118,13 +121,18 @@ class NotificationService
     /**
      * Notify about milestone revision requested.
      */
-    public static function milestoneRevision(int $freelancerId, string $milestoneTitle, string $contractTitle, int $contractId): Notification
+    public static function milestoneRevision(int $freelancerId, string $milestoneTitle, string $contractTitle, int $contractId, ?string $revisionNote = null): Notification
     {
+        $message = "Milestone '{$milestoneTitle}' in contract '{$contractTitle}' needs revision.";
+        if ($revisionNote) {
+            $message .= " Feedback: {$revisionNote}";
+        }
+
         return self::create(
             $freelancerId,
             'milestone_revision',
             'Milestone Revision Requested',
-            "Milestone '{$milestoneTitle}' in contract '{$contractTitle}' needs revision.",
+            $message,
             "/freelancer/contracts/{$contractId}"
         );
     }
@@ -245,6 +253,101 @@ class NotificationService
             'Skill Assessment Passed',
             "Your skill assessment has been passed. Your credential '{$credentialTitle}' is now verified.",
             '/freelancer/credentials'
+        );
+    }
+
+    /**
+     * Notify all administrators of an administrative event.
+     */
+    public static function notifyAdmins(string $type, string $title, string $message, ?string $link = null): void
+    {
+        $admins = \App\Models\User::where('role', 'admin')->get();
+        foreach ($admins as $admin) {
+            self::create($admin->id, $type, $title, $message, $link);
+        }
+    }
+
+    /**
+     * Notify user that their verification has been approved.
+     */
+    public static function verificationApproved(int $userId, string $role): Notification
+    {
+        $link = $role === 'employer' ? '/employer/profile' : '/freelancer/profile';
+
+        return self::create(
+            $userId,
+            'verification_approved',
+            'Verification Approved',
+            'Your identity and profile verification documents have been approved.',
+            $link
+        );
+    }
+
+    /**
+     * Notify user that their verification has been rejected.
+     */
+    public static function verificationRejected(int $userId, string $role, ?string $reason = null): Notification
+    {
+        $link = $role === 'employer' ? '/employer/profile' : '/freelancer/profile';
+        $message = 'Your verification request was rejected.';
+        if ($reason) {
+            $message .= " Reason: {$reason}";
+        }
+
+        return self::create(
+            $userId,
+            'verification_rejected',
+            'Verification Rejected',
+            $message,
+            $link
+        );
+    }
+
+    /**
+     * Notify user that contract has been completed.
+     */
+    public static function contractCompleted(int $userId, string $title, string $role): Notification
+    {
+        $link = $role === 'employer' ? '/employer/contracts' : '/freelancer/contracts';
+
+        return self::create(
+            $userId,
+            'contract_completed',
+            'Contract Completed',
+            "The contract '{$title}' has been successfully completed. You can now leave a review.",
+            $link
+        );
+    }
+
+    /**
+     * Notify participants about dispute.
+     */
+    public static function disputeRaised(int $userId, string $contractTitle, int $contractId, string $role): Notification
+    {
+        $link = $role === 'employer' ? "/employer/contracts/{$contractId}" : "/freelancer/contracts/{$contractId}";
+
+        return self::create(
+            $userId,
+            'dispute_raised',
+            'Dispute Raised',
+            "A dispute has been raised on contract '{$contractTitle}'. An administrator will review it.",
+            $link
+        );
+    }
+
+    /**
+     * Notify participants about dispute resolution.
+     */
+    public static function disputeResolved(int $userId, string $contractTitle, int $contractId, string $role, string $status): Notification
+    {
+        $link = $role === 'employer' ? "/employer/contracts/{$contractId}" : "/freelancer/contracts/{$contractId}";
+
+        return self::create(
+            $userId,
+            'dispute_resolved',
+            'Dispute Resolved',
+            "The dispute on contract '{$contractTitle}' has been resolved. Contract status is now {$status}.",
+            $link
         );
     }
 }

@@ -50,6 +50,19 @@ class Job extends Model
     ];
 
     /**
+     * The "booted" method of the model.
+     * Ensure platform-wide deletion synchronization and data cleanup for jobs.
+     */
+    protected static function booted(): void
+    {
+        static::deleting(function (Job $job) {
+            $job->skills()->detach();
+            $job->proposals()->delete();
+            $job->savedByUsers()->delete();
+        });
+    }
+
+    /**
      * Scope a query to only open (published) jobs.
      */
     public function scopeOpen($query)

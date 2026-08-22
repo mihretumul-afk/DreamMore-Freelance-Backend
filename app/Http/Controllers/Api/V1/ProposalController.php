@@ -31,7 +31,7 @@ class ProposalController extends BaseApiController
             return $guard;
         }
 
-        $proposals = Proposal::with(['job', 'freelancer'])
+        $proposals = Proposal::with(['job', 'freelancer.freelancerProfile.skills', 'portfolioItems'])
             ->when($request->user()->role !== 'admin', fn ($query) => $query->where('freelancer_id', $request->user()->id))
             ->orderByDesc('created_at')
             ->paginate(15);
@@ -59,7 +59,7 @@ class ProposalController extends BaseApiController
             return $proposal;
         }
 
-        $proposal->load(['job', 'freelancer', 'contract']);
+        $proposal->load(['job', 'freelancer.freelancerProfile.skills', 'contract', 'portfolioItems']);
 
         return $this->sendResponse(
             new ProposalResource($proposal),
@@ -77,6 +77,10 @@ class ProposalController extends BaseApiController
             return $guard;
         }
 
+        if ($request->user()->role === 'freelancer' && !$request->user()->hasApprovedCredentials()) {
+            return $this->sendForbidden('Your credentials must be approved by an administrator before you can apply for jobs.');
+        }
+
         if ($job->status !== 'open') {
             return $this->sendError('Proposals can only be submitted for open jobs.', [], 422);
         }
@@ -90,11 +94,19 @@ class ProposalController extends BaseApiController
             return $this->sendError('You already have an active proposal for this job.', [], 422);
         }
 
-        $proposal = DB::transaction(function () use ($request, $job) {
-            $proposal = Proposal::create(array_merge($request->validated(), [
+        $validated = $request->validated();
+        $portfolioItemIds = $validated['portfolio_item_ids'] ?? [];
+        unset($validated['portfolio_item_ids']);
+
+        $proposal = DB::transaction(function () use ($validated, $portfolioItemIds, $job, $request) {
+            $proposal = Proposal::create(array_merge($validated, [
                 'job_id' => $job->id,
                 'freelancer_id' => $request->user()->id,
             ]));
+
+            if (!empty($portfolioItemIds)) {
+                $proposal->portfolioItems()->sync($portfolioItemIds);
+            }
 
             $job->increment('proposals_count');
 
@@ -109,7 +121,15 @@ class ProposalController extends BaseApiController
             $job->id
         );
 
-        $proposal->load(['job', 'freelancer']);
+        // Notify admins about the new proposal
+        NotificationService::notifyAdmins(
+            'admin_proposal_created',
+            'New Proposal Submitted',
+            "{$request->user()->name} submitted a proposal for '{$job->title}'.",
+            "/employer/jobs/{$job->id}/proposals"
+        );
+
+        $proposal->load(['job', 'freelancer.freelancerProfile.skills', 'portfolioItems']);
 
         return $this->sendResponse(
             new ProposalResource($proposal),
@@ -128,6 +148,10 @@ class ProposalController extends BaseApiController
             return $guard;
         }
 
+        if ($request->user()->role === 'freelancer' && !$request->user()->hasApprovedCredentials()) {
+            return $this->sendForbidden('Your credentials must be approved by an administrator before you can apply for jobs.');
+        }
+
         $proposal = $this->loadOwnedProposal($request, $proposal);
         if ($proposal instanceof JsonResponse) {
             return $proposal;
@@ -141,9 +165,17 @@ class ProposalController extends BaseApiController
             );
         }
 
-        $proposal->update($request->validated());
+        $validated = $request->validated();
+        $portfolioItemIds = $validated['portfolio_item_ids'] ?? null;
+        unset($validated['portfolio_item_ids']);
 
-        $proposal->load(['job', 'freelancer']);
+        $proposal->update($validated);
+
+        if (!is_null($portfolioItemIds)) {
+            $proposal->portfolioItems()->sync($portfolioItemIds);
+        }
+
+        $proposal->load(['job', 'freelancer.freelancerProfile.skills', 'portfolioItems']);
         $proposal->refresh();
 
         return $this->sendResponse(
@@ -202,7 +234,7 @@ class ProposalController extends BaseApiController
         }
 
         $proposals = $job->proposals()
-            ->with(['job', 'freelancer'])
+            ->with(['job', 'freelancer.freelancerProfile.skills', 'portfolioItems'])
             ->orderByDesc('created_at')
             ->paginate(15);
 
@@ -234,7 +266,7 @@ class ProposalController extends BaseApiController
             return $proposal;
         }
 
-        $proposal->load(['job', 'freelancer', 'contract']);
+        $proposal->load(['job', 'freelancer.freelancerProfile.skills', 'contract', 'portfolioItems']);
 
         return $this->sendResponse(
             new ProposalResource($proposal),
@@ -369,7 +401,11 @@ class ProposalController extends BaseApiController
             return $this->sendError('A contract already exists for this proposal.', [], 422);
         }
 
-        DB::transaction(function () use ($job, $proposal) {
+        if ($proposal->freelancer && $proposal->freelancer->role === 'freelancer' && !$proposal->freelancer->hasApprovedCredentials()) {
+            return $this->sendError('The freelancer\'s credentials must be approved by an administrator before this proposal can be accepted.', [], 422);
+        }
+
+        $contract = DB::transaction(function () use ($job, $proposal) {
             $proposal->update(['status' => 'accepted']);
 
             $job->proposals()
@@ -377,7 +413,7 @@ class ProposalController extends BaseApiController
                 ->active()
                 ->update(['status' => 'rejected']);
 
-            Contract::create([
+            $createdContract = Contract::create([
                 'job_id' => $job->id,
                 'proposal_id' => $proposal->id,
                 'employer_id' => $job->employer_id,
@@ -386,11 +422,15 @@ class ProposalController extends BaseApiController
                 'budget_type' => $job->budget_type,
                 'agreed_rate' => $proposal->bid_amount,
                 'total_amount' => $proposal->bid_amount,
+                'status' => 'active',
+                'start_date' => now(),
             ]);
 
             if ($job->status === 'open') {
                 $job->update(['status' => 'in_progress']);
             }
+
+            return $createdContract;
         });
 
         // Notify the freelancer about acceptance

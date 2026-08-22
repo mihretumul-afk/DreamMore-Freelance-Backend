@@ -2,8 +2,11 @@
 
 namespace App\Http\Resources;
 
+use App\Models\Contract;
 use App\Models\Credential;
+use App\Models\PortfolioItem;
 use App\Models\Review;
+use App\Models\Verification;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -18,6 +21,21 @@ class FreelancerProfileResource extends JsonResource
     {
         $isOwnProfile = $request->user() && $request->user()->id === $this->user_id;
         $isAdmin = $request->user() && $request->user()->role === 'admin';
+
+        $completedContracts = Contract::where('freelancer_id', $this->user_id)
+            ->where('status', 'completed')
+            ->count();
+        $endedContracts = Contract::where('freelancer_id', $this->user_id)
+            ->whereIn('status', ['completed', 'cancelled', 'disputed'])
+            ->count();
+
+        $successRate = $endedContracts > 0
+            ? (int) round(($completedContracts / $endedContracts) * 100)
+            : null;
+
+        $verification = Verification::where('user_id', $this->user_id)
+            ->orderByDesc('created_at')
+            ->first();
 
         return [
             'id' => $this->id,
@@ -42,6 +60,9 @@ class FreelancerProfileResource extends JsonResource
             'completed_jobs_count' => (int) ($this->completed_jobs_count ?? 0),
             'rating' => $this->rating ? (float) $this->rating : 0.0,
             'review_count' => Review::where('reviewee_id', $this->user_id)->count(),
+            'success_rate' => $successRate,
+            'is_verified' => $this->user ? $this->user->hasApprovedCredentials() : false,
+            'verification_status' => $this->user ? $this->user->verificationStatus() : ($verification ? $verification->status : 'unverified'),
             'availability_status' => $this->availability_status ?? 'available',
             'skills' => $this->whenLoaded('skills', function () {
                 return $this->skills->map(function ($skill) {
@@ -53,6 +74,22 @@ class FreelancerProfileResource extends JsonResource
                     ];
                 });
             }),
+            'portfolio_items' => PortfolioItem::where('user_id', $this->user_id)
+                ->with(['category:id,name,slug', 'skill:id,name,slug'])
+                ->orderBy('display_order')
+                ->get()
+                ->map(function ($item) {
+                    return [
+                        'id' => $item->id,
+                        'title' => $item->title,
+                        'description' => $item->description,
+                        'category' => $item->category ? ['id' => $item->category->id, 'name' => $item->category->name] : null,
+                        'skill' => $item->skill ? ['id' => $item->skill->id, 'name' => $item->skill->name] : null,
+                        'project_url' => $item->project_url,
+                        'image_url' => $item->image_url,
+                        'display_order' => $item->display_order,
+                    ];
+                }),
             // Show verified credentials metadata publicly (no file paths)
             // Includes trust level: Dream More LMS vs External verified
             'verified_credentials' => Credential::where('user_id', $this->user_id)

@@ -20,6 +20,7 @@ class SavedFreelancerController extends BaseApiController
 
         $saved = SavedFreelancer::query()
             ->where('user_id', $user->id)
+            ->whereHas('freelancerProfile.user', fn ($u) => $u->where('status', 'active')->where('role', 'freelancer'))
             ->with(['freelancerProfile.user', 'freelancerProfile.skills'])
             ->orderByDesc('saved_freelancers.created_at')
             ->paginate(15);
@@ -38,6 +39,11 @@ class SavedFreelancerController extends BaseApiController
     public function save(Request $request, FreelancerProfile $freelancer): JsonResponse
     {
         $user = $request->user();
+
+        // Ensure target freelancer exists and is active.
+        if (! $freelancer->user || $freelancer->user->status !== 'active' || $freelancer->user->role !== 'freelancer') {
+            return $this->sendError('Freelancer profile not found.', [], 404);
+        }
 
         // Prevent saving your own profile.
         if ($user->id === $freelancer->user_id) {
@@ -73,6 +79,13 @@ class SavedFreelancerController extends BaseApiController
     public function saved(Request $request, FreelancerProfile $freelancer): JsonResponse
     {
         $user = $request->user();
+
+        if (! $freelancer->user || $freelancer->user->status !== 'active' || $freelancer->user->role !== 'freelancer') {
+            return $this->sendResponse(
+                ['saved' => false],
+                'Freelancer is not saved.'
+            );
+        }
 
         $isSaved = SavedFreelancer::where('user_id', $user->id)
             ->where('freelancer_profile_id', $freelancer->id)

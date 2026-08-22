@@ -44,6 +44,7 @@ class RecommendationService
         $candidates = Job::query()
             ->with(['category', 'skills', 'employer'])
             ->open()
+            ->whereHas('employer', fn ($e) => $e->where('status', 'active'))
             ->whereNotIn('id', $proposedJobIds)
             ->where('employer_id', '!=', $user->id)
             ->get();
@@ -154,6 +155,7 @@ class RecommendationService
             ->with(['user', 'skills'])
             ->where('availability_status', '!=', 'not_available')
             ->whereNotIn('user_id', $activeFreelancerIds)
+            ->whereHas('user', fn ($u) => $u->where('status', 'active')->where('role', 'freelancer'))
             ->get();
 
         $scored = $candidates->map(function (FreelancerProfile $freelancer) use (

@@ -55,6 +55,48 @@ class User extends Authenticatable
     }
 
     /**
+     * The "booted" method of the model.
+     * Ensure platform-wide deletion synchronization and data cleanup.
+     */
+    protected static function booted(): void
+    {
+        static::deleting(function (User $user) {
+            // Delete posted jobs which cascades job skills, proposals, saved jobs
+            $user->jobs()->each(function (Job $job) {
+                $job->delete();
+            });
+
+            // Clean up freelancer profile and reverse saved freelancer references
+            if ($user->freelancerProfile) {
+                SavedFreelancer::where('freelancer_profile_id', $user->freelancerProfile->id)->delete();
+                $user->freelancerProfile->skills()->detach();
+                $user->freelancerProfile->delete();
+            }
+
+            // Clean up employer profile
+            if ($user->employerProfile) {
+                $user->employerProfile->delete();
+            }
+
+            // Clean up proposals submitted by freelancer
+            $user->proposals()->delete();
+
+            // Clean up items saved by this user
+            $user->savedJobs()->delete();
+            $user->savedFreelancers()->delete();
+
+            // Clean up credentials, verifications, portfolio items
+            $user->credentials()->delete();
+            $user->verifications()->delete();
+            $user->portfolioItems()->delete();
+
+            // Clean up notifications and tokens
+            $user->notifications()->delete();
+            $user->tokens()->delete();
+        });
+    }
+
+    /**
      * Check if user is a freelancer.
      */
     public function isFreelancer(): bool
@@ -136,5 +178,52 @@ class User extends Authenticatable
     public function receivedMessages(): HasMany
     {
         return $this->hasMany(Message::class, 'receiver_id');
+    }
+
+    public function portfolioItems(): HasMany
+    {
+        return $this->hasMany(PortfolioItem::class)->orderBy('display_order');
+    }
+
+    public function verifications(): HasMany
+    {
+        return $this->hasMany(Verification::class)->orderByDesc('created_at');
+    }
+
+    /**
+     * Determine whether the freelancer has at least one credential or verification
+     * approved by an administrator (or auto-verified via trusted LMS).
+     */
+    public function hasApprovedCredentials(): bool
+    {
+        return $this->credentials()->where('status', 'approved')->exists()
+            || $this->verifications()->where('status', 'approved')->exists();
+    }
+
+    /**
+     * Get the overall verification status for the freelancer.
+     * Returns: 'approved' | 'pending' | 'rejected' | 'unverified'
+     */
+    public function verificationStatus(): string
+    {
+        if ($this->hasApprovedCredentials()) {
+            return 'approved';
+        }
+
+        $hasPending = $this->credentials()->where('status', 'pending')->exists()
+            || $this->verifications()->where('status', 'pending')->exists();
+
+        if ($hasPending) {
+            return 'pending';
+        }
+
+        $hasRejected = $this->credentials()->where('status', 'rejected')->exists()
+            || $this->verifications()->where('status', 'rejected')->exists();
+
+        if ($hasRejected) {
+            return 'rejected';
+        }
+
+        return 'unverified';
     }
 }

@@ -6,6 +6,7 @@ use App\Models\Credential;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class CredentialController extends BaseApiController
 {
@@ -103,8 +104,9 @@ class CredentialController extends BaseApiController
         ]);
 
         $file = $request->file('document');
-        $safeName = 'credentials/' . $user->id . '_' . time() . '_' . bin2hex(random_bytes(8)) . '.' . $file->getClientOriginalExtension();
-        $file->storeAs('private', $safeName);
+        $fileName = $user->id . '_' . time() . '_' . bin2hex(random_bytes(8)) . '.' . $file->getClientOriginalExtension();
+        $safeName = 'credentials/' . $fileName;
+        $file->storeAs('credentials', $fileName, 'private');
 
         // Determine test requirements and source
         $isExternal = in_array($validated['type'], ['external_certificate', 'training_certificate', 'professional_qualification', 'other'], true);
@@ -220,8 +222,9 @@ class CredentialController extends BaseApiController
             }
 
             $file = $request->file('document');
-            $safeName = 'credentials/' . $user->id . '_' . time() . '_' . bin2hex(random_bytes(8)) . '.' . $file->getClientOriginalExtension();
-            $file->storeAs('private', $safeName);
+            $fileName = $user->id . '_' . time() . '_' . bin2hex(random_bytes(8)) . '.' . $file->getClientOriginalExtension();
+            $safeName = 'credentials/' . $fileName;
+            $file->storeAs('credentials', $fileName, 'private');
 
             $updateData['file_path'] = $safeName;
             $updateData['file_original_name'] = $file->getClientOriginalName();
@@ -280,7 +283,7 @@ class CredentialController extends BaseApiController
     /**
      * Download a credential file (owner or admin only).
      */
-    public function download(Request $request, Credential $credential): \Symfony\Component\HttpFoundation\StreamedResponse|JsonResponse
+    public function download(Request $request, Credential $credential): StreamedResponse|JsonResponse
     {
         $user = $request->user();
 
@@ -288,11 +291,23 @@ class CredentialController extends BaseApiController
             return $this->sendForbidden('You do not have access to this credential.');
         }
 
-        if (!Storage::disk('private')->exists($credential->file_path)) {
+        $disk = Storage::disk('private')->exists($credential->file_path)
+            ? Storage::disk('private')
+            : (Storage::disk('local')->exists($credential->file_path)
+                ? Storage::disk('local')
+                : (Storage::disk('public')->exists($credential->file_path) ? Storage::disk('public') : null));
+
+        if (!$disk) {
+            if (Storage::disk('local')->exists('private/' . $credential->file_path)) {
+                return Storage::disk('local')->download(
+                    'private/' . $credential->file_path,
+                    $credential->file_original_name ?? basename($credential->file_path)
+                );
+            }
             return $this->sendError('Credential file not found.', [], 404);
         }
 
-        return Storage::disk('private')->download(
+        return $disk->download(
             $credential->file_path,
             $credential->file_original_name ?? basename($credential->file_path)
         );

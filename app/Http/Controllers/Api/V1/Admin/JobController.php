@@ -64,7 +64,9 @@ class JobController extends BaseApiController
 
     public function destroy(Job $job): JsonResponse
     {
-        $job->delete();
+        \Illuminate\Support\Facades\DB::transaction(function () use ($job) {
+            $job->delete();
+        });
 
         return $this->sendResponse(null, 'Job deleted successfully.');
     }

@@ -20,6 +20,7 @@ class SavedJobController extends BaseApiController
 
         $savedJobs = SavedJob::query()
             ->where('user_id', $user->id)
+            ->whereHas('job', fn ($j) => $j->where('status', 'open')->whereHas('employer', fn ($e) => $e->where('status', 'active')))
             ->with(['job.category', 'job.skills', 'job.employer'])
             ->orderByDesc('saved_jobs.created_at')
             ->paginate(15);
@@ -39,8 +40,8 @@ class SavedJobController extends BaseApiController
     {
         $user = $request->user();
 
-        // Ensure the job is open (publicly visible) and exists.
-        if ($job->status !== 'open') {
+        // Ensure the job is open (publicly visible) and employer is active.
+        if ($job->status !== 'open' || ! $job->employer || $job->employer->status !== 'active') {
             return $this->sendError('Job not found.', [], 404);
         }
 
@@ -73,6 +74,13 @@ class SavedJobController extends BaseApiController
     public function saved(Request $request, Job $job): JsonResponse
     {
         $user = $request->user();
+
+        if ($job->status !== 'open' || ! $job->employer || $job->employer->status !== 'active') {
+            return $this->sendResponse(
+                ['saved' => false],
+                'Job is not saved.'
+            );
+        }
 
         $isSaved = SavedJob::where('user_id', $user->id)
             ->where('job_id', $job->id)

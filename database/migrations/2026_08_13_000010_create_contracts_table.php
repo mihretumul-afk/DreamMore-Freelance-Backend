@@ -18,7 +18,7 @@ return new class extends Migration
             $table->enum('budget_type', ['fixed', 'hourly'])->default('fixed');
             $table->decimal('agreed_rate', 10, 2);
             $table->decimal('total_amount', 10, 2);
-            $table->enum('status', ['active', 'completed', 'paused', 'cancelled'])->default('active');
+            $table->enum('status', ['active', 'completed', 'paused', 'cancelled', 'disputed'])->default('active');
             $table->timestamp('start_date')->useCurrent();
             $table->timestamp('end_date')->nullable();
             $table->timestamps();

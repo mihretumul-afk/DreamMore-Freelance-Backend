@@ -18,7 +18,7 @@ class CategoryController extends BaseApiController
         $categories = Category::query()
             ->where('is_active', true)
             ->with('skills')
-            ->withCount(['jobs' => fn ($query) => $query->where('status', 'open')])
+            ->withCount(['jobs' => fn ($query) => $query->where('status', 'open')->whereHas('employer', fn ($eq) => $eq->where('status', 'active'))])
             ->withCount('skills')
             ->when($request->filled('search'), function ($query) use ($request) {
                 $search = $request->input('search');

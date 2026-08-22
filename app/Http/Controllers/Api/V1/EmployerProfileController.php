@@ -81,8 +81,11 @@ class EmployerProfileController extends BaseApiController
     public function showPublic(string $id): JsonResponse
     {
         $profile = EmployerProfile::with('user')
-            ->where('id', $id)
-            ->orWhere('user_id', $id)
+            ->whereHas('user', fn ($userQuery) => $userQuery->where('status', 'active')->where('role', 'employer'))
+            ->where(function ($query) use ($id) {
+                $query->where('id', $id)
+                    ->orWhere('user_id', $id);
+            })
             ->first();
 
         if (!$profile) {

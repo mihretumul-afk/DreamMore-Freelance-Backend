@@ -150,6 +150,27 @@ class CategorySeeder extends Seeder
             'skills' => ['Network Security', 'Ethical Hacking', 'Linux Security', 'Penetration Testing'],
         ],
         [
+            'name' => 'Mechanical Design',
+            'slug' => 'mechanical-design',
+            'description' => 'Mechanical engineering, product design, and 3D prototyping.',
+            'icon' => 'Wrench',
+            'skills' => ['SolidWorks', 'AutoCAD Mechanical', 'CATIA', 'Mechanical Engineering', 'Product Design'],
+        ],
+        [
+            'name' => 'CAD Modeling',
+            'slug' => 'cad-modeling',
+            'description' => 'Precise 2D/3D CAD drawings, architectural drafting, and modeling.',
+            'icon' => 'Layers',
+            'skills' => ['AutoCAD', '3D CAD', 'Fusion 360', 'Revit', 'Drafting'],
+        ],
+        [
+            'name' => 'Simulation',
+            'slug' => 'simulation',
+            'description' => 'Engineering simulations, FEA, CFD, and numerical modeling.',
+            'icon' => 'Cpu',
+            'skills' => ['ANSYS', 'FEA Analysis', 'CFD Simulation', 'MATLAB', 'Simulink'],
+        ],
+        [
             'name' => 'Other',
             'slug' => 'other',
             'description' => 'Anything else you need done well.',

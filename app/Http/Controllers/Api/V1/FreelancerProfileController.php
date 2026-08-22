@@ -40,6 +40,7 @@ class FreelancerProfileController extends BaseApiController
 
         $query = FreelancerProfile::query()
             ->with(['user', 'skills'])
+            ->whereHas('user', fn ($userQuery) => $userQuery->where('status', 'active')->where('role', 'freelancer'))
             ->when($request->filled('search'), function ($query) use ($search) {
                 return $query->where(function ($query) use ($search) {
                     $query->where('headline', 'like', "%{$search}%")
@@ -179,8 +180,11 @@ class FreelancerProfileController extends BaseApiController
     public function showPublic(string $id): JsonResponse
     {
         $profile = FreelancerProfile::with(['user', 'skills'])
-            ->where('id', $id)
-            ->orWhere('user_id', $id)
+            ->whereHas('user', fn ($userQuery) => $userQuery->where('status', 'active')->where('role', 'freelancer'))
+            ->where(function ($query) use ($id) {
+                $query->where('id', $id)
+                    ->orWhere('user_id', $id);
+            })
             ->first();
 
         if (! $profile) {

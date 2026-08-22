@@ -2,14 +2,17 @@
 
 use App\Http\Controllers\Api\V1\Auth\AuthController;
 use App\Http\Controllers\Api\V1\CategoryController;
+use App\Http\Controllers\Api\V1\SearchController;
 use App\Http\Controllers\Api\V1\ContractController;
 use App\Http\Controllers\Api\V1\EmployerProfileController;
 use App\Http\Controllers\Api\V1\FreelancerProfileController;
 use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\JobController;
 use App\Http\Controllers\Api\V1\MilestoneController;
+use App\Http\Controllers\Api\V1\PortfolioController;
 use App\Http\Controllers\Api\V1\ProposalController;
 use App\Http\Controllers\Api\V1\SkillController;
+use App\Http\Controllers\Api\V1\VerificationSubmissionController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -22,9 +25,13 @@ use Illuminate\Support\Facades\Route;
 Route::get('/health', [HealthController::class, 'health']);
 Route::get('/status', [HealthController::class, 'status']);
 
-// Public Profiles
+// Global Marketplace Search (public)
+Route::get('/search', [SearchController::class, 'index']);
+
+// Public Profiles & Portfolios
 Route::get('/freelancers', [FreelancerProfileController::class, 'index']);
 Route::get('/freelancers/{id}', [FreelancerProfileController::class, 'showPublic']);
+Route::get('/freelancers/{id}/portfolio', [PortfolioController::class, 'publicIndex']);
 Route::get('/employers/{id}', [EmployerProfileController::class, 'showPublic']);
 
 // Marketplace Catalog (public, read-only)
@@ -50,6 +57,18 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/employer/profile', [EmployerProfileController::class, 'showCurrent']);
     Route::put('/employer/profile', [EmployerProfileController::class, 'update']);
+
+    // Portfolio Management (Freelancers)
+    Route::get('/freelancer/portfolio', [PortfolioController::class, 'index']);
+    Route::post('/freelancer/portfolio', [PortfolioController::class, 'store']);
+    Route::get('/freelancer/portfolio/{portfolio}', [PortfolioController::class, 'show']);
+    Route::match(['put', 'patch'], '/freelancer/portfolio/{portfolio}', [PortfolioController::class, 'update']);
+    Route::delete('/freelancer/portfolio/{portfolio}', [PortfolioController::class, 'destroy']);
+    Route::put('/freelancer/portfolio-reorder', [PortfolioController::class, 'reorder']);
+
+    // User Verification Submissions (Employer & Freelancer)
+    Route::get('/verifications/me', [VerificationSubmissionController::class, 'showMe']);
+    Route::post('/verifications', [VerificationSubmissionController::class, 'store']);
 });
 
 // Stage 12 — Contracts & Milestones
@@ -61,8 +80,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/contracts/{contract}/resume', [ContractController::class, 'resume']);
     Route::post('/contracts/{contract}/complete', [ContractController::class, 'complete']);
     Route::post('/contracts/{contract}/cancel', [ContractController::class, 'cancel']);
+    Route::post('/contracts/{contract}/dispute', [ContractController::class, 'dispute']);
 
-    // Milestones
+    // Milestones & Deliverables
     Route::get('/contracts/{contract}/milestones', [MilestoneController::class, 'index']);
     Route::post('/contracts/{contract}/milestones', [MilestoneController::class, 'store']);
     Route::get('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'show']);
@@ -71,6 +91,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/contracts/{contract}/milestones/{milestone}/approve', [MilestoneController::class, 'approve']);
     Route::post('/contracts/{contract}/milestones/{milestone}/revision', [MilestoneController::class, 'revision']);
     Route::delete('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'destroy']);
+    Route::get('/contracts/{contract}/milestones/{milestone}/submissions', [MilestoneController::class, 'submissions']);
+    Route::get('/contracts/{contract}/milestones/{milestone}/submissions/{submission}/files/{file}/download', [MilestoneController::class, 'downloadFile']);
 });
 
 // Stage 13 — Job Posting & Management
@@ -97,8 +119,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/proposals/{proposal}', [ProposalController::class, 'update']);
     Route::post('/proposals/{proposal}/withdraw', [ProposalController::class, 'withdraw']);
 
-    // Freelancer submits a proposal for a job
-    Route::post('/jobs/{job}/proposals', [ProposalController::class, 'store']);
+    // Freelancer submits a proposal for a job (requires approved credentials)
+    Route::post('/jobs/{job}/proposals', [ProposalController::class, 'store'])->middleware('verified.freelancer');
 
     // Employer proposal management (own jobs only)
     Route::get('/jobs/{job}/proposals', [ProposalController::class, 'jobProposals']);
@@ -237,6 +259,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
     Route::put('/notifications/read-all', [NotificationController::class, 'markAllRead']);
     Route::get('/notifications/unread', [NotificationController::class, 'unreadCount']);
+    Route::delete('/notifications/{notification}', [NotificationController::class, 'destroy']);
 });
 
 // Reviews

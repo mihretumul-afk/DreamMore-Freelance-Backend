@@ -27,6 +27,8 @@ class ProposalRequest extends FormRequest
             'bid_amount' => [$required, 'numeric', 'min:1', 'max:99999999.99'],
             'currency' => ['sometimes', 'string', 'size:3'],
             'estimated_duration' => [$required, 'string', 'max:255'],
+            'portfolio_item_ids' => ['nullable', 'array'],
+            'portfolio_item_ids.*' => ['integer', 'exists:portfolio_items,id'],
         ];
     }
 }

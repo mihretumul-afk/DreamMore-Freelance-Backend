@@ -14,6 +14,7 @@ class Verification extends Model
         'notes',
         'status',
         'reason',
+        'reviewed_by',
         'reviewed_at',
     ];
 
@@ -29,5 +30,10 @@ class Verification extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function reviewer(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reviewed_by');
     }
 }

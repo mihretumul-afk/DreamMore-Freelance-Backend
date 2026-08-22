@@ -124,11 +124,23 @@ class VerificationController extends BaseApiController
      */
     public function downloadCredential(Credential $credential): StreamedResponse|JsonResponse
     {
-        if (!Storage::disk('private')->exists($credential->file_path)) {
+        $disk = Storage::disk('private')->exists($credential->file_path)
+            ? Storage::disk('private')
+            : (Storage::disk('local')->exists($credential->file_path)
+                ? Storage::disk('local')
+                : (Storage::disk('public')->exists($credential->file_path) ? Storage::disk('public') : null));
+
+        if (!$disk) {
+            if (Storage::disk('local')->exists('private/' . $credential->file_path)) {
+                return Storage::disk('local')->download(
+                    'private/' . $credential->file_path,
+                    $credential->file_original_name ?? basename($credential->file_path)
+                );
+            }
             return $this->sendError('Credential file not found.', [], 404);
         }
 
-        return Storage::disk('private')->download(
+        return $disk->download(
             $credential->file_path,
             $credential->file_original_name ?? basename($credential->file_path)
         );
@@ -140,8 +152,11 @@ class VerificationController extends BaseApiController
             return $this->sendError('Only pending verifications can be approved.', [], 422);
         }
 
+        $admin = $request->user();
+
         $verification->update([
             'status' => 'approved',
+            'reviewed_by' => $admin ? $admin->id : null,
             'reviewed_at' => now(),
         ]);
 
@@ -150,7 +165,15 @@ class VerificationController extends BaseApiController
             $verification->user->update(['email_verified_at' => now()]);
         }
 
-        return $this->sendResponse($verification->fresh()->load('user'), 'Verification approved successfully.');
+        // Notify the user about verification approval
+        if ($verification->user) {
+            \App\Services\NotificationService::verificationApproved(
+                $verification->user_id,
+                $verification->user->role ?? 'freelancer'
+            );
+        }
+
+        return $this->sendResponse($verification->fresh()->load(['user', 'reviewer']), 'Verification approved successfully.');
     }
 
     public function reject(Request $request, Verification $verification): JsonResponse
@@ -163,13 +186,25 @@ class VerificationController extends BaseApiController
             'reason' => 'nullable|string|max:1000',
         ]);
 
+        $admin = $request->user();
+
         $verification->update([
             'status' => 'rejected',
             'reason' => $request->input('reason'),
+            'reviewed_by' => $admin ? $admin->id : null,
             'reviewed_at' => now(),
         ]);
 
-        return $this->sendResponse($verification->fresh()->load('user'), 'Verification rejected successfully.');
+        // Notify the user about verification rejection
+        if ($verification->user) {
+            \App\Services\NotificationService::verificationRejected(
+                $verification->user_id,
+                $verification->user->role ?? 'freelancer',
+                $request->input('reason')
+            );
+        }
+
+        return $this->sendResponse($verification->fresh()->load(['user', 'reviewer']), 'Verification rejected successfully.');
     }
 
     /**

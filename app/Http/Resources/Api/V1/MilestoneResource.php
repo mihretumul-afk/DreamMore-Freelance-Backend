@@ -26,6 +26,9 @@ class MilestoneResource extends JsonResource
             'due_date' => $this->due_date?->toIso8601String(),
             'submitted_at' => $this->submitted_at?->toIso8601String(),
             'approved_at' => $this->approved_at?->toIso8601String(),
+            'submissions' => MilestoneSubmissionResource::collection($this->whenLoaded('submissions')),
+            'latest_submission' => new MilestoneSubmissionResource($this->whenLoaded('latestSubmission')),
+            'submissions_count' => $this->submissions()->count(),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

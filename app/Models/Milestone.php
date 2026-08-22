@@ -5,6 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Milestone extends Model
 {
@@ -38,5 +40,15 @@ class Milestone extends Model
     public function contract(): BelongsTo
     {
         return $this->belongsTo(Contract::class);
+    }
+
+    public function submissions(): HasMany
+    {
+        return $this->hasMany(MilestoneSubmission::class)->orderBy('created_at', 'desc');
+    }
+
+    public function latestSubmission(): HasOne
+    {
+        return $this->hasOne(MilestoneSubmission::class)->latestOfMany();
     }
 }

@@ -52,7 +52,7 @@ class ProposalTest extends TestCase
     public function test_freelancer_can_submit_proposal(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
 
         $response = $this->actingAsSanctum($freelancer)
@@ -110,7 +110,7 @@ class ProposalTest extends TestCase
 
     public function test_invalid_job_rejected(): void
     {
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
 
         $this->actingAsSanctum($freelancer)
             ->postJson('/api/v1/jobs/999999/proposals', [
@@ -124,7 +124,7 @@ class ProposalTest extends TestCase
     public function test_closed_job_cannot_receive_proposal(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $closed = $this->createJob($employer, ['status' => 'closed']);
         $inProgress = $this->createJob($employer, ['status' => 'in_progress']);
 
@@ -142,7 +142,7 @@ class ProposalTest extends TestCase
     public function test_proposal_validation_errors_are_returned(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
 
         $this->actingAsSanctum($freelancer)
@@ -154,7 +154,7 @@ class ProposalTest extends TestCase
     public function test_duplicate_active_proposal_is_prevented(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $this->createProposal($job, $freelancer);
 
@@ -172,7 +172,7 @@ class ProposalTest extends TestCase
     public function test_withdrawn_proposal_allows_resubmission(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -197,7 +197,7 @@ class ProposalTest extends TestCase
     public function test_freelancer_can_view_own_proposal(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -211,8 +211,8 @@ class ProposalTest extends TestCase
     public function test_employer_can_view_proposals_for_own_job(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancerA = $this->createContractUser('freelancer');
-        $freelancerB = $this->createContractUser('freelancer');
+        $freelancerA = $this->createVerifiedFreelancer();
+        $freelancerB = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $this->createProposal($job, $freelancerA);
         $this->createProposal($job, $freelancerB);
@@ -228,7 +228,7 @@ class ProposalTest extends TestCase
     {
         $employer = $this->createContractUser('employer');
         $otherEmployer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $this->createProposal($job, $freelancer);
 
@@ -240,8 +240,8 @@ class ProposalTest extends TestCase
     public function test_freelancer_cannot_view_another_freelancers_proposal(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancerA = $this->createContractUser('freelancer');
-        $freelancerB = $this->createContractUser('freelancer');
+        $freelancerA = $this->createVerifiedFreelancer();
+        $freelancerB = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancerA);
 
@@ -252,7 +252,7 @@ class ProposalTest extends TestCase
 
     public function test_invalid_proposal_returns_404(): void
     {
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
 
         $this->actingAsSanctum($freelancer)
             ->getJson('/api/v1/proposals/999999')
@@ -262,7 +262,7 @@ class ProposalTest extends TestCase
     public function test_employer_can_view_single_proposal_for_own_job(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -276,7 +276,7 @@ class ProposalTest extends TestCase
     public function test_freelancer_can_list_own_proposals(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $jobA = $this->createJob($employer, ['title' => 'Job A']);
         $jobB = $this->createJob($employer, ['title' => 'Job B']);
         $this->createProposal($jobA, $freelancer);
@@ -294,7 +294,7 @@ class ProposalTest extends TestCase
     public function test_freelancer_can_update_own_proposal(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -318,8 +318,8 @@ class ProposalTest extends TestCase
     public function test_freelancer_cannot_update_another_freelancers_proposal(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancerA = $this->createContractUser('freelancer');
-        $freelancerB = $this->createContractUser('freelancer');
+        $freelancerA = $this->createVerifiedFreelancer();
+        $freelancerB = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancerA);
 
@@ -335,7 +335,7 @@ class ProposalTest extends TestCase
     public function test_accepted_proposal_cannot_be_edited(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer, ['status' => 'accepted']);
 
@@ -351,7 +351,7 @@ class ProposalTest extends TestCase
     public function test_rejected_proposal_cannot_be_edited(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer, ['status' => 'rejected']);
 
@@ -367,7 +367,7 @@ class ProposalTest extends TestCase
     public function test_withdrawn_proposal_cannot_be_edited(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer, ['status' => 'withdrawn']);
 
@@ -383,7 +383,7 @@ class ProposalTest extends TestCase
     public function test_freelancer_cannot_change_proposal_status_directly(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -408,7 +408,7 @@ class ProposalTest extends TestCase
     public function test_freelancer_can_withdraw_own_proposal(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -426,8 +426,8 @@ class ProposalTest extends TestCase
     public function test_freelancer_cannot_withdraw_another_freelancers_proposal(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancerA = $this->createContractUser('freelancer');
-        $freelancerB = $this->createContractUser('freelancer');
+        $freelancerA = $this->createVerifiedFreelancer();
+        $freelancerB = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancerA);
 
@@ -439,7 +439,7 @@ class ProposalTest extends TestCase
     public function test_accepted_proposal_cannot_be_withdrawn(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer, ['status' => 'accepted']);
 
@@ -453,7 +453,7 @@ class ProposalTest extends TestCase
     public function test_employer_can_shortlist_proposal(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -471,7 +471,7 @@ class ProposalTest extends TestCase
     public function test_employer_can_reject_proposal(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -489,7 +489,7 @@ class ProposalTest extends TestCase
     public function test_employer_can_accept_proposal(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -515,7 +515,7 @@ class ProposalTest extends TestCase
     {
         $employer = $this->createContractUser('employer');
         $otherEmployer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -531,7 +531,7 @@ class ProposalTest extends TestCase
     public function test_shortlisted_proposal_cannot_be_shortlisted_again(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer, ['status' => 'shortlisted']);
 
@@ -545,7 +545,7 @@ class ProposalTest extends TestCase
     public function test_accept_creates_exactly_one_contract(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer, ['bid_amount' => 48000]);
 
@@ -570,7 +570,7 @@ class ProposalTest extends TestCase
     public function test_duplicate_acceptance_does_not_create_duplicate_contract(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -588,8 +588,8 @@ class ProposalTest extends TestCase
     public function test_accept_rejects_other_active_proposals(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancerA = $this->createContractUser('freelancer');
-        $freelancerB = $this->createContractUser('freelancer');
+        $freelancerA = $this->createVerifiedFreelancer();
+        $freelancerB = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $winning = $this->createProposal($job, $freelancerA);
         $other = $this->createProposal($job, $freelancerB);
@@ -611,7 +611,7 @@ class ProposalTest extends TestCase
     public function test_accept_marks_job_as_in_progress(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -628,7 +628,7 @@ class ProposalTest extends TestCase
     public function test_job_in_progress_cannot_receive_new_proposals(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -636,7 +636,7 @@ class ProposalTest extends TestCase
             ->postJson('/api/v1/jobs/' . $job->id . '/proposals/' . $proposal->id . '/accept')
             ->assertStatus(200);
 
-        $otherFreelancer = $this->createContractUser('freelancer');
+        $otherFreelancer = $this->createVerifiedFreelancer();
         $this->actingAsSanctum($otherFreelancer)
             ->postJson('/api/v1/jobs/' . $job->id . '/proposals', [
                 'cover_letter' => 'Too late to apply.',
@@ -651,7 +651,7 @@ class ProposalTest extends TestCase
     public function test_proposal_response_omits_sensitive_data(): void
     {
         $employer = $this->createContractUser('employer');
-        $freelancer = $this->createContractUser('freelancer');
+        $freelancer = $this->createVerifiedFreelancer();
         $job = $this->createJob($employer);
         $proposal = $this->createProposal($job, $freelancer);
 
@@ -666,5 +666,57 @@ class ProposalTest extends TestCase
         $this->assertArrayNotHasKey('remember_token', $payload);
         $this->assertArrayNotHasKey('email', $payload['freelancer']);
         $this->assertArrayNotHasKey('password', $payload['freelancer']);
+    }
+
+    public function test_accept_sends_notifications_to_both_freelancer_and_employer(): void
+    {
+        $employer = $this->createContractUser('employer');
+        $freelancer = $this->createVerifiedFreelancer();
+        $job = $this->createJob($employer);
+        $proposal = $this->createProposal($job, $freelancer);
+
+        $this->actingAsSanctum($employer)
+            ->postJson('/api/v1/jobs/' . $job->id . '/proposals/' . $proposal->id . '/accept')
+            ->assertStatus(200);
+
+        // Verify freelancer received acceptance & contract notifications
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $freelancer->id,
+            'type' => 'proposal_accepted',
+        ]);
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $freelancer->id,
+            'type' => 'contract_created',
+        ]);
+
+        // Verify employer received contract notification
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $employer->id,
+            'type' => 'contract_created',
+        ]);
+    }
+
+    public function test_invalid_or_nonexistent_proposal_cannot_be_accepted(): void
+    {
+        $employer = $this->createContractUser('employer');
+        $job = $this->createJob($employer);
+
+        $this->actingAsSanctum($employer)
+            ->postJson('/api/v1/jobs/' . $job->id . '/proposals/99999/accept')
+            ->assertStatus(404);
+    }
+
+    public function test_cannot_accept_already_rejected_proposal(): void
+    {
+        $employer = $this->createContractUser('employer');
+        $freelancer = $this->createVerifiedFreelancer();
+        $job = $this->createJob($employer);
+        $proposal = $this->createProposal($job, $freelancer, ['status' => 'rejected']);
+
+        $this->actingAsSanctum($employer)
+            ->postJson('/api/v1/jobs/' . $job->id . '/proposals/' . $proposal->id . '/accept')
+            ->assertStatus(422);
+
+        $this->assertDatabaseCount('contracts', 0);
     }
 }

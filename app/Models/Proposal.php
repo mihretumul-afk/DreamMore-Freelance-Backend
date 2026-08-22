@@ -55,4 +55,10 @@ class Proposal extends Model
     {
         return $this->hasOne(Contract::class);
     }
+
+    public function portfolioItems()
+    {
+        return $this->belongsToMany(PortfolioItem::class, 'proposal_portfolio_items')
+            ->withTimestamps();
+    }
 }

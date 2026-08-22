@@ -187,4 +187,83 @@ class NotificationTest extends TestCase
 
         $response->assertOk();
     }
+
+    public function test_user_can_delete_own_notification(): void
+    {
+        $user = $this->createUser();
+        $token = $user->createToken('test')->plainTextToken;
+
+        $notification = Notification::create([
+            'user_id' => $user->id,
+            'type' => 'new_proposal',
+            'title' => 'To be deleted',
+            'message' => 'Delete me',
+        ]);
+
+        $response = $this->withHeader('Authorization', "Bearer {$token}")
+            ->deleteJson("/api/v1/notifications/{$notification->id}");
+
+        $response->assertOk()
+            ->assertJson(['success' => true]);
+
+        $this->assertDatabaseMissing('notifications', ['id' => $notification->id]);
+    }
+
+    public function test_user_cannot_delete_another_users_notification(): void
+    {
+        $user1 = $this->createUser();
+        $user2 = $this->createUser();
+        $token2 = $user2->createToken('test')->plainTextToken;
+
+        $notification = Notification::create([
+            'user_id' => $user1->id,
+            'type' => 'new_proposal',
+            'title' => 'User1 notification',
+            'message' => 'User2 cannot delete this',
+        ]);
+
+        $response = $this->withHeader('Authorization', "Bearer {$token2}")
+            ->deleteJson("/api/v1/notifications/{$notification->id}");
+
+        $response->assertForbidden();
+
+        $this->assertDatabaseHas('notifications', ['id' => $notification->id]);
+    }
+
+    public function test_mark_as_read_keeps_notification_in_list_and_updates_unread_count(): void
+    {
+        $user = $this->createUser();
+        $token = $user->createToken('test')->plainTextToken;
+
+        $notification = Notification::create([
+            'user_id' => $user->id,
+            'type' => 'contract_created',
+            'title' => 'Contract Notice',
+            'message' => 'Contract was created',
+            'read_at' => null,
+        ]);
+
+        // Verify unread count is 1
+        $countRes = $this->withHeader('Authorization', "Bearer {$token}")
+            ->getJson('/api/v1/notifications/unread');
+        $countRes->assertOk()->assertJsonPath('data.unread_count', 1);
+
+        // Mark as read
+        $readRes = $this->withHeader('Authorization', "Bearer {$token}")
+            ->putJson("/api/v1/notifications/{$notification->id}/read");
+        $readRes->assertOk();
+
+        // Verify unread count is now 0
+        $countResAfter = $this->withHeader('Authorization', "Bearer {$token}")
+            ->getJson('/api/v1/notifications/unread');
+        $countResAfter->assertOk()->assertJsonPath('data.unread_count', 0);
+
+        // Verify notification is STILL in notification list/history
+        $listRes = $this->withHeader('Authorization', "Bearer {$token}")
+            ->getJson('/api/v1/notifications');
+        $listRes->assertOk();
+        $this->assertCount(1, $listRes->json('data'));
+        $this->assertEquals($notification->id, $listRes->json('data.0.id'));
+        $this->assertNotNull($listRes->json('data.0.read_at'));
+    }
 }

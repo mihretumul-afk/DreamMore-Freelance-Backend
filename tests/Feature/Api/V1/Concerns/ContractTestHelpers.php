@@ -23,6 +23,28 @@ trait ContractTestHelpers
     }
 
     /**
+     * Create a freelancer with an approved credential so they can apply for jobs.
+     */
+    protected function createVerifiedFreelancer(array $userOverrides = []): User
+    {
+        $user = User::factory()->create(array_merge([
+            'role' => 'freelancer',
+            'status' => 'active',
+        ], $userOverrides));
+
+        \App\Models\Credential::create([
+            'user_id' => $user->id,
+            'title' => 'Certified Professional',
+            'type' => 'professional_qualification',
+            'file_path' => 'credentials/test_cert.pdf',
+            'status' => 'approved',
+            'reviewed_at' => now(),
+        ]);
+
+        return $user;
+    }
+
+    /**
      * Create an employer, freelancer, job, proposal and active contract.
      *
      * @return array{employer: User, freelancer: User, job: Job, proposal: Proposal, contract: Contract}
