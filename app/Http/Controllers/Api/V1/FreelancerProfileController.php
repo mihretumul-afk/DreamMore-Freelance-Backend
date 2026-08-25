@@ -40,6 +40,7 @@ class FreelancerProfileController extends BaseApiController
 
         $query = FreelancerProfile::query()
             ->with(['user', 'skills'])
+            ->approved()
             ->whereHas('user', fn ($userQuery) => $userQuery->where('status', 'active')->where('role', 'freelancer'))
             ->when($request->filled('search'), function ($query) use ($search) {
                 return $query->where(function ($query) use ($search) {
@@ -122,6 +123,7 @@ class FreelancerProfileController extends BaseApiController
         $profile = FreelancerProfile::firstOrCreate(
             ['user_id' => $user->id],
             [
+                'approval_status' => 'pending',
                 'availability_status' => 'available',
                 'completed_jobs_count' => 0,
                 'total_earnings' => 0.00,
@@ -180,6 +182,7 @@ class FreelancerProfileController extends BaseApiController
     public function showPublic(string $id): JsonResponse
     {
         $profile = FreelancerProfile::with(['user', 'skills'])
+            ->approved()
             ->whereHas('user', fn ($userQuery) => $userQuery->where('status', 'active')->where('role', 'freelancer'))
             ->where(function ($query) use ($id) {
                 $query->where('id', $id)

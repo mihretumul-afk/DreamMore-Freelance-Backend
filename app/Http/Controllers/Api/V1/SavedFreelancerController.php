@@ -21,6 +21,7 @@ class SavedFreelancerController extends BaseApiController
         $saved = SavedFreelancer::query()
             ->where('user_id', $user->id)
             ->whereHas('freelancerProfile.user', fn ($u) => $u->where('status', 'active')->where('role', 'freelancer'))
+            ->whereHas('freelancerProfile', fn ($q) => $q->where('approval_status', 'approved'))
             ->with(['freelancerProfile.user', 'freelancerProfile.skills'])
             ->orderByDesc('saved_freelancers.created_at')
             ->paginate(15);
@@ -40,8 +41,12 @@ class SavedFreelancerController extends BaseApiController
     {
         $user = $request->user();
 
-        // Ensure target freelancer exists and is active.
+        // Ensure target freelancer exists, is active, and is approved.
         if (! $freelancer->user || $freelancer->user->status !== 'active' || $freelancer->user->role !== 'freelancer') {
+            return $this->sendError('Freelancer profile not found.', [], 404);
+        }
+
+        if ($freelancer->approval_status !== 'approved') {
             return $this->sendError('Freelancer profile not found.', [], 404);
         }
 

@@ -3,6 +3,7 @@
 namespace Tests\Feature\Api\V1;
 
 use App\Models\Credential;
+use App\Models\FreelancerProfile;
 use App\Models\Job;
 use App\Models\Proposal;
 use App\Models\User;
@@ -37,6 +38,7 @@ class MandatoryVerificationTest extends TestCase
     {
         $employer = $this->createContractUser('employer');
         $freelancer = $this->createContractUser('freelancer');
+        FreelancerProfile::create(['user_id' => $freelancer->id, 'approval_status' => 'approved']);
         $job = $this->createJob($employer);
 
         $response = $this->actingAsSanctum($freelancer)
@@ -60,6 +62,7 @@ class MandatoryVerificationTest extends TestCase
     {
         $employer = $this->createContractUser('employer');
         $freelancer = $this->createContractUser('freelancer');
+        FreelancerProfile::create(['user_id' => $freelancer->id, 'approval_status' => 'approved']);
         $job = $this->createJob($employer);
 
         // Submit a pending credential
@@ -92,6 +95,7 @@ class MandatoryVerificationTest extends TestCase
     {
         $employer = $this->createContractUser('employer');
         $freelancer = $this->createContractUser('freelancer');
+        FreelancerProfile::create(['user_id' => $freelancer->id, 'approval_status' => 'approved']);
         $job = $this->createJob($employer);
 
         // Submit a rejected credential
@@ -152,6 +156,7 @@ class MandatoryVerificationTest extends TestCase
     {
         $employer = $this->createContractUser('employer');
         $freelancer = $this->createContractUser('freelancer');
+        FreelancerProfile::create(['user_id' => $freelancer->id, 'approval_status' => 'approved']);
         $job = $this->createJob($employer);
 
         Verification::create([
@@ -177,6 +182,7 @@ class MandatoryVerificationTest extends TestCase
     {
         $employer = $this->createContractUser('employer');
         $freelancer = $this->createContractUser('freelancer');
+        FreelancerProfile::create(['user_id' => $freelancer->id, 'approval_status' => 'approved']);
         $job = $this->createJob($employer);
 
         Credential::create([
@@ -205,6 +211,7 @@ class MandatoryVerificationTest extends TestCase
     {
         $employer = $this->createContractUser('employer');
         $freelancer = $this->createContractUser('freelancer');
+        FreelancerProfile::create(['user_id' => $freelancer->id, 'approval_status' => 'approved']);
         $job = $this->createJob($employer);
 
         // One rejected credential

@@ -36,6 +36,15 @@ class EnsureVerifiedFreelancer
             ], 403);
         }
 
+        // Check approval status first
+        $profile = $user->freelancerProfile;
+        if (!$profile || $profile->approval_status !== 'approved') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Your account is pending admin approval. You cannot submit proposals until your profile is approved.',
+            ], 403);
+        }
+
         if (!$user->hasApprovedCredentials()) {
             return response()->json([
                 'success' => false,

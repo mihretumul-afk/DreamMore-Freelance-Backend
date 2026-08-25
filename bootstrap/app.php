@@ -15,8 +15,10 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
-            'role' => \App\Http\Middleware\EnsureRole::class,
+            'role'               => \App\Http\Middleware\EnsureRole::class,
+            'permission'         => \App\Http\Middleware\CheckPermission::class,
             'verified.freelancer' => \App\Http\Middleware\EnsureVerifiedFreelancer::class,
+            'maintenance'        => \App\Http\Middleware\MaintenanceMode::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Traits\HasAdminRoles;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -11,7 +12,7 @@ use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
 {
-    use HasApiTokens, HasFactory, Notifiable;
+    use HasApiTokens, HasFactory, HasAdminRoles, Notifiable;
 
     /**
      * The attributes that are mass assignable.
@@ -93,6 +94,9 @@ class User extends Authenticatable
             // Clean up notifications and tokens
             $user->notifications()->delete();
             $user->tokens()->delete();
+
+            // Clean up admin role assignments
+            $user->adminRoles()->detach();
         });
     }
 

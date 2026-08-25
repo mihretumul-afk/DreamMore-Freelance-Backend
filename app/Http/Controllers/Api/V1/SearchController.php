@@ -109,6 +109,7 @@ class SearchController extends BaseApiController
     {
         $query = FreelancerProfile::query()
             ->with(['user', 'skills'])
+            ->approved()
             ->whereHas('user', fn ($user) => $user->where('status', 'active')->where('role', 'freelancer'));
 
         foreach ($terms as $term) {

@@ -347,7 +347,7 @@ class AdminTest extends TestCase
                            'platform_name' => 'Dream More AppWorks Updated',
                        ]);
         $putRes->assertStatus(200)
-               ->assertJsonPath('data.platform_name', 'Dream More AppWorks Updated');
+               ->assertJsonPath('data.general.platform_name', 'Dream More AppWorks Updated');
     }
 
     // ─── VERIFICATIONS ─────────────────────────────────────────────────

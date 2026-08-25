@@ -35,6 +35,11 @@ class ProposalPortfolioTest extends TestCase
             'status' => 'active',
         ]);
 
+        \App\Models\FreelancerProfile::create([
+            'user_id' => $this->freelancer->id,
+            'approval_status' => 'approved',
+        ]);
+
         \App\Models\Credential::create([
             'user_id' => $this->freelancer->id,
             'title' => 'Certified Professional',

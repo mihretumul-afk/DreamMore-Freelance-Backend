@@ -153,6 +153,7 @@ class RecommendationService
 
         $candidates = FreelancerProfile::query()
             ->with(['user', 'skills'])
+            ->approved()
             ->where('availability_status', '!=', 'not_available')
             ->whereNotIn('user_id', $activeFreelancerIds)
             ->whereHas('user', fn ($u) => $u->where('status', 'active')->where('role', 'freelancer'))

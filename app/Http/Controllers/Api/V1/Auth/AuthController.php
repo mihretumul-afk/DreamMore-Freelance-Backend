@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\BaseApiController;
 use App\Http\Requests\Api\V1\Auth\LoginRequest;
 use App\Http\Requests\Api\V1\Auth\RegisterRequest;
 use App\Http\Resources\Api\V1\UserResource;
+use App\Models\AdminSetting;
 use App\Services\AuthService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,12 @@ class AuthController extends BaseApiController
      */
     public function register(RegisterRequest $request): JsonResponse
     {
+        // Check if registration is open
+        $registrationOpen = AdminSetting::getValue('registration_open', 'true', 'boolean');
+        if (!$registrationOpen) {
+            return $this->sendError('Registration is currently closed. Please try again later.', [], 403);
+        }
+
         $result = $this->authService->register($request->validated());
 
         return $this->sendResponse([

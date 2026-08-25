@@ -32,6 +32,12 @@ trait ContractTestHelpers
             'status' => 'active',
         ], $userOverrides));
 
+        \App\Models\FreelancerProfile::create([
+            'user_id' => $user->id,
+            'approval_status' => 'approved',
+            'approved_at' => now(),
+        ]);
+
         \App\Models\Credential::create([
             'user_id' => $user->id,
             'title' => 'Certified Professional',

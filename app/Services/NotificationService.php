@@ -350,4 +350,51 @@ class NotificationService
             $link
         );
     }
+
+    /**
+     * Notify freelancer that their profile has been approved.
+     */
+    public static function freelancerApproved(int $freelancerId): Notification
+    {
+        return self::create(
+            $freelancerId,
+            'freelancer_approved',
+            'Profile Approved',
+            'Your freelancer profile has been approved! You are now visible on the marketplace and can submit proposals.',
+            '/freelancer/dashboard'
+        );
+    }
+
+    /**
+     * Notify freelancer that their profile has been rejected.
+     */
+    public static function freelancerRejected(int $freelancerId, ?string $reason = null): Notification
+    {
+        $message = 'Your freelancer profile application has been rejected.';
+        if ($reason) {
+            $message .= " Reason: {$reason}";
+        }
+        $message .= ' Please update your profile and submit again.';
+
+        return self::create(
+            $freelancerId,
+            'freelancer_rejected',
+            'Profile Rejected',
+            $message,
+            '/freelancer/profile'
+        );
+    }
+
+    /**
+     * Notify admins about new freelancer registration.
+     */
+    public static function newFreelancerRegistered(int $freelancerId, string $freelancerName): void
+    {
+        self::notifyAdmins(
+            'new_freelancer_registration',
+            'New Freelancer Registration',
+            "{$freelancerName} has registered as a freelancer and is awaiting approval.",
+            '/admin/freelancers?status=pending'
+        );
+    }
 }

@@ -10,21 +10,39 @@ class AdminSetting extends Model
 
     /**
      * Get a setting value by key with type casting.
+     *
+     * When $type is provided, the $default is also cast through the same
+     * type-casting logic so callers always receive the expected PHP type
+     * even when no DB row exists yet.
      */
-    public static function getValue(string $key, mixed $default = null): mixed
+    public static function getValue(string $key, mixed $default = null, ?string $type = null): mixed
     {
         $setting = static::where('key', $key)->first();
 
-        if (!$setting) {
-            return $default;
+        $raw = $setting?->value ?? $default;
+        $castType = $setting?->type ?? $type;
+
+        return match ($castType) {
+            'boolean' => static::castBoolean($raw),
+            'integer' => (int) $raw,
+            'json'    => is_string($raw) ? json_decode($raw, true) : $raw,
+            default   => $raw,
+        };
+    }
+
+    /**
+     * Safely cast a value to boolean.
+     *
+     * The string "false" must be treated as false — PHP's (bool) cast
+     * treats any non-empty string as true.
+     */
+    private static function castBoolean(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
         }
 
-        return match ($setting->type) {
-            'boolean' => (bool) $setting->value,
-            'integer' => (int) $setting->value,
-            'json' => json_decode($setting->value, true),
-            default => $setting->value,
-        };
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN);
     }
 
     /**

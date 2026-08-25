@@ -28,7 +28,10 @@ class AuthService
         if ($user->role === 'freelancer') {
             FreelancerProfile::create([
                 'user_id' => $user->id,
+                'approval_status' => 'pending',
             ]);
+            // Notify admins about new freelancer registration
+            NotificationService::newFreelancerRegistered($user->id, $user->name);
         } elseif ($user->role === 'employer') {
             EmployerProfile::create([
                 'user_id' => $user->id,

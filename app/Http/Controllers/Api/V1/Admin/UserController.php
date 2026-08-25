@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Admin;
 use App\Http\Controllers\Api\V1\BaseApiController;
 use App\Http\Resources\Api\V1\UserResource;
 use App\Models\User;
+use App\Services\AuditService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -39,9 +40,9 @@ class UserController extends BaseApiController
             200,
             [
                 'current_page' => $users->currentPage(),
-                'last_page' => $users->lastPage(),
-                'per_page' => $users->perPage(),
-                'total' => $users->total(),
+                'last_page'    => $users->lastPage(),
+                'per_page'     => $users->perPage(),
+                'total'        => $users->total(),
             ]
         );
     }
@@ -50,10 +51,7 @@ class UserController extends BaseApiController
     {
         $user->load('freelancerProfile', 'employerProfile');
 
-        return $this->sendResponse(
-            new UserResource($user),
-            'User retrieved successfully.'
-        );
+        return $this->sendResponse(new UserResource($user), 'User retrieved successfully.');
     }
 
     public function updateStatus(Request $request, User $user): JsonResponse
@@ -62,13 +60,33 @@ class UserController extends BaseApiController
             'is_active' => 'required|boolean',
         ]);
 
-        if ($request->user()->id === $user->id && !$request->boolean('is_active')) {
+        $actor = $request->user();
+
+        if ($actor->id === $user->id && !$request->boolean('is_active')) {
             return $this->sendError('You cannot deactivate your own admin account.', [], 422);
         }
 
-        $user->update([
-            'status' => $request->boolean('is_active') ? 'active' : 'suspended',
-        ]);
+        $oldStatus = $user->status;
+        $activate  = $request->boolean('is_active');
+        $newStatus = $activate ? 'active' : 'suspended';
+
+        DB::transaction(function () use ($user, $newStatus, $activate, $actor, $oldStatus) {
+            $user->update(['status' => $newStatus]);
+
+            // Audit log — use the appropriate wrapper based on direction.
+            $context = [
+                'name'       => $user->name,
+                'email'      => $user->email,
+                'old_status' => $oldStatus,
+                'new_status' => $newStatus,
+            ];
+
+            if ($activate) {
+                AuditService::userActivated($user->id, $actor->id, $context);
+            } else {
+                AuditService::userSuspended($user->id, $actor->id, $context);
+            }
+        });
 
         return $this->sendResponse(
             new UserResource($user->fresh()),
@@ -82,21 +100,30 @@ class UserController extends BaseApiController
             'role' => 'required|in:freelancer,employer,admin',
         ]);
 
+        $actor   = $request->user();
         $oldRole = $user->role;
         $newRole = $request->input('role');
 
-        if ($request->user()->id === $user->id && $newRole !== 'admin') {
+        if ($actor->id === $user->id && $newRole !== 'admin') {
             return $this->sendError('You cannot remove your own admin role.', [], 422);
         }
 
-        $user->update(['role' => $newRole]);
+        DB::transaction(function () use ($user, $newRole, $oldRole, $actor) {
+            $user->update(['role' => $newRole]);
 
-        // Ensure the user has the appropriate profile for their role.
-        if ($newRole === 'freelancer' && !$user->freelancerProfile) {
-            $user->freelancerProfile()->create([]);
-        } elseif ($newRole === 'employer' && !$user->employerProfile) {
-            $user->employerProfile()->create([]);
-        }
+            if ($newRole === 'freelancer' && !$user->freelancerProfile) {
+                $user->freelancerProfile()->create([]);
+            } elseif ($newRole === 'employer' && !$user->employerProfile) {
+                $user->employerProfile()->create([]);
+            }
+
+            AuditService::userRoleChanged($user->id, $actor->id, [
+                'name'     => $user->name,
+                'email'    => $user->email,
+                'old_role' => $oldRole,
+                'new_role' => $newRole,
+            ]);
+        });
 
         return $this->sendResponse(
             new UserResource($user->fresh()->load('freelancerProfile', 'employerProfile')),
@@ -106,11 +133,19 @@ class UserController extends BaseApiController
 
     public function destroy(Request $request, User $user): JsonResponse
     {
-        if ($request->user()->id === $user->id) {
+        $actor = $request->user();
+
+        if ($actor->id === $user->id) {
             return $this->sendError('You cannot delete your own admin account.', [], 422);
         }
 
-        DB::transaction(function () use ($user) {
+        DB::transaction(function () use ($user, $actor) {
+            AuditService::userDeleted($user->id, $actor->id, [
+                'name'  => $user->name,
+                'email' => $user->email,
+                'role'  => $user->role,
+            ]);
+
             $user->tokens()->delete();
             $user->delete();
         });

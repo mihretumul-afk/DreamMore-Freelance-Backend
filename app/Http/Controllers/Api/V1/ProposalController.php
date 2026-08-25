@@ -77,8 +77,14 @@ class ProposalController extends BaseApiController
             return $guard;
         }
 
-        if ($request->user()->role === 'freelancer' && !$request->user()->hasApprovedCredentials()) {
-            return $this->sendForbidden('Your credentials must be approved by an administrator before you can apply for jobs.');
+        if ($request->user()->role === 'freelancer') {
+            $profile = $request->user()->freelancerProfile;
+            if (!$profile || $profile->approval_status !== 'approved') {
+                return $this->sendForbidden('Your account is pending admin approval. You cannot submit proposals until your profile is approved.');
+            }
+            if (!$request->user()->hasApprovedCredentials()) {
+                return $this->sendForbidden('Your credentials must be approved by an administrator before you can apply for jobs.');
+            }
         }
 
         if ($job->status !== 'open') {
@@ -146,10 +152,6 @@ class ProposalController extends BaseApiController
         $guard = $this->requireFreelancer($request);
         if ($guard) {
             return $guard;
-        }
-
-        if ($request->user()->role === 'freelancer' && !$request->user()->hasApprovedCredentials()) {
-            return $this->sendForbidden('Your credentials must be approved by an administrator before you can apply for jobs.');
         }
 
         $proposal = $this->loadOwnedProposal($request, $proposal);
@@ -401,8 +403,11 @@ class ProposalController extends BaseApiController
             return $this->sendError('A contract already exists for this proposal.', [], 422);
         }
 
-        if ($proposal->freelancer && $proposal->freelancer->role === 'freelancer' && !$proposal->freelancer->hasApprovedCredentials()) {
-            return $this->sendError('The freelancer\'s credentials must be approved by an administrator before this proposal can be accepted.', [], 422);
+        if ($proposal->freelancer && $proposal->freelancer->role === 'freelancer') {
+            $freelancerProfile = $proposal->freelancer->freelancerProfile;
+            if (!$freelancerProfile || $freelancerProfile->approval_status !== 'approved') {
+                return $this->sendError('The freelancer must be approved before this proposal can be accepted.', [], 422);
+            }
         }
 
         $contract = DB::transaction(function () use ($job, $proposal) {

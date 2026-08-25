@@ -40,6 +40,9 @@ class FreelancerProfileResource extends JsonResource
         return [
             'id' => $this->id,
             'user_id' => $this->user_id,
+            'approval_status' => $this->approval_status ?? 'pending',
+            'approved_at' => $this->approved_at?->toISOString(),
+            'rejection_reason' => $this->rejection_reason,
             'user' => [
                 'id' => $this->user->id,
                 'name' => $this->user->name,

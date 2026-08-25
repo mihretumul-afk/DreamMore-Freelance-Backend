@@ -7,6 +7,7 @@ use App\Models\Contract;
 use App\Models\EmployerProfile;
 use App\Models\FreelancerProfile;
 use App\Models\Report;
+use App\Services\AuditService;
 use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -30,9 +31,9 @@ class ReportController extends BaseApiController
             200,
             [
                 'current_page' => $reports->currentPage(),
-                'last_page' => $reports->lastPage(),
-                'per_page' => $reports->perPage(),
-                'total' => $reports->total(),
+                'last_page'    => $reports->lastPage(),
+                'per_page'     => $reports->perPage(),
+                'total'        => $reports->total(),
             ]
         );
     }
@@ -46,7 +47,7 @@ class ReportController extends BaseApiController
             $target = Contract::with(['employer', 'freelancer', 'job', 'milestones'])->find($report->target_id);
         }
 
-        $data = $report->toArray();
+        $data         = $report->toArray();
         $data['target'] = $target;
 
         return $this->sendResponse($data, 'Report retrieved successfully.');
@@ -59,16 +60,17 @@ class ReportController extends BaseApiController
         }
 
         $request->validate([
-            'resolution' => 'nullable|string|max:2000',
+            'resolution'      => 'nullable|string|max:2000',
             'contract_action' => 'nullable|in:active,completed,cancelled',
         ]);
 
         $contractAction = $request->input('contract_action', 'active');
+        $actor          = $request->user();
 
-        DB::transaction(function () use ($report, $request, $contractAction) {
+        DB::transaction(function () use ($report, $request, $contractAction, $actor) {
             $report->update([
-                'status' => 'resolved',
-                'resolution' => $request->input('resolution'),
+                'status'      => 'resolved',
+                'resolution'  => $request->input('resolution'),
                 'resolved_at' => now(),
             ]);
 
@@ -76,8 +78,10 @@ class ReportController extends BaseApiController
                 $contract = Contract::find($report->target_id);
                 if ($contract) {
                     $contract->update([
-                        'status' => $contractAction,
-                        'end_date' => in_array($contractAction, ['completed', 'cancelled'], true) ? now() : $contract->end_date,
+                        'status'   => $contractAction,
+                        'end_date' => in_array($contractAction, ['completed', 'cancelled'], true)
+                            ? now()
+                            : $contract->end_date,
                     ]);
 
                     if ($contractAction === 'completed') {
@@ -95,7 +99,6 @@ class ReportController extends BaseApiController
                         }
                     }
 
-                    // Notify both participants
                     NotificationService::disputeResolved(
                         $contract->freelancer_id,
                         $contract->title,
@@ -112,6 +115,15 @@ class ReportController extends BaseApiController
                     );
                 }
             }
+
+            // Audit log the dispute resolution.
+            AuditService::disputeResolved($report->id, $actor->id, [
+                'reason'          => $report->reason,
+                'target_type'     => $report->target_type,
+                'target_id'       => $report->target_id,
+                'resolution'      => $request->input('resolution'),
+                'contract_action' => $contractAction,
+            ]);
         });
 
         return $this->sendResponse($report->fresh()->load('reporter'), 'Report resolved successfully.');
@@ -123,9 +135,11 @@ class ReportController extends BaseApiController
             return $this->sendError('Only pending reports can be dismissed.', [], 422);
         }
 
-        DB::transaction(function () use ($report) {
+        $actor = request()->user();
+
+        DB::transaction(function () use ($report, $actor) {
             $report->update([
-                'status' => 'dismissed',
+                'status'      => 'dismissed',
                 'resolved_at' => now(),
             ]);
 
@@ -150,6 +164,13 @@ class ReportController extends BaseApiController
                     );
                 }
             }
+
+            // Audit log the dismissal.
+            AuditService::disputeDismissed($report->id, $actor->id, [
+                'reason'      => $report->reason,
+                'target_type' => $report->target_type,
+                'target_id'   => $report->target_id,
+            ]);
         });
 
         return $this->sendResponse($report->fresh()->load('reporter'), 'Report dismissed successfully.');
@@ -157,6 +178,15 @@ class ReportController extends BaseApiController
 
     public function destroy(Report $report): JsonResponse
     {
+        $actor = request()->user();
+
+        AuditService::disputeDeleted($report->id, $actor->id, [
+            'reason'      => $report->reason,
+            'target_type' => $report->target_type,
+            'target_id'   => $report->target_id,
+            'old_status'  => $report->status,
+        ]);
+
         $report->delete();
 
         return $this->sendResponse(null, 'Report deleted successfully.');

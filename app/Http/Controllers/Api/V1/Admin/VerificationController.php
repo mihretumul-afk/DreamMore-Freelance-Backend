@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Api\V1\BaseApiController;
 use App\Models\Credential;
+use App\Models\Notification;
 use App\Models\Verification;
+use App\Services\AuditService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -13,27 +15,22 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 class VerificationController extends BaseApiController
 {
     /**
-     * List all verifications (identity/document) and credentials.
-     * The 'type' param filters: 'all' (default), 'identity', 'credential'.
+     * List all verifications + credentials.
+     * Supports type filter: 'all' (default) | 'identity' | 'credential'.
      */
     public function index(Request $request): JsonResponse
     {
-        $status = $request->input('status');
-        $type = $request->input('type', 'all');
+        $status  = $request->input('status');
+        $type    = $request->input('type', 'all');
         $perPage = 15;
 
-        // Use a single UNION ALL query to fetch both types at the database level,
-        // avoiding loading all records into PHP memory.
         if ($type === 'identity' || $type === 'credential') {
-            $singleType = $type;
-            $page = $request->input('page', 1);
-
-            if ($singleType === 'identity') {
-                $query = Verification::with('user')
+            if ($type === 'identity') {
+                $query     = Verification::with('user')
                     ->when($status, fn ($q) => $q->where('status', $status))
                     ->orderByDesc('created_at');
                 $paginator = $query->paginate($perPage);
-                $items = $paginator->getCollection()->map(function ($v) {
+                $items     = $paginator->getCollection()->map(function ($v) {
                     $v->item_type = 'identity';
                     return $v;
                 });
@@ -43,7 +40,7 @@ class VerificationController extends BaseApiController
                     ->orderByDesc('created_at')
                     ->with('skillTestAttempts.skillTest');
                 $paginator = $query->paginate($perPage);
-                $items = $paginator->getCollection()->map(function ($c) {
+                $items     = $paginator->getCollection()->map(function ($c) {
                     $c->item_type = 'credential';
                     return $c;
                 });
@@ -55,17 +52,14 @@ class VerificationController extends BaseApiController
                 200,
                 [
                     'current_page' => $paginator->currentPage(),
-                    'last_page' => $paginator->lastPage(),
-                    'per_page' => $paginator->perPage(),
-                    'total' => $paginator->total(),
+                    'last_page'    => $paginator->lastPage(),
+                    'per_page'     => $paginator->perPage(),
+                    'total'        => $paginator->total(),
                 ]
             );
         }
 
-        // For 'all' type, combine both using UNION-style approach.
-        // Fetch each type separately with limit and sort in PHP.
-        $halfPer = (int) ceil($perPage / 2);
-
+        // 'all' — merge both types.
         $verifications = Verification::with('user')
             ->when($status, fn ($q) => $q->where('status', $status))
             ->orderByDesc('created_at')
@@ -95,9 +89,9 @@ class VerificationController extends BaseApiController
             200,
             [
                 'current_page' => (int) $request->input('page', 1),
-                'last_page' => (int) ceil($total / $perPage),
-                'per_page' => $perPage,
-                'total' => $total,
+                'last_page'    => (int) ceil($total / $perPage),
+                'per_page'     => $perPage,
+                'total'        => $total,
             ]
         );
     }
@@ -109,9 +103,6 @@ class VerificationController extends BaseApiController
         return $this->sendResponse($verification, 'Verification retrieved successfully.');
     }
 
-    /**
-     * Show a credential for review.
-     */
     public function showCredential(Credential $credential): JsonResponse
     {
         $credential->load(['user', 'reviewer']);
@@ -119,9 +110,6 @@ class VerificationController extends BaseApiController
         return $this->sendResponse($credential, 'Credential retrieved successfully.');
     }
 
-    /**
-     * Download a credential file (admin only).
-     */
     public function downloadCredential(Credential $credential): StreamedResponse|JsonResponse
     {
         $disk = Storage::disk('private')->exists($credential->file_path)
@@ -155,17 +143,15 @@ class VerificationController extends BaseApiController
         $admin = $request->user();
 
         $verification->update([
-            'status' => 'approved',
-            'reviewed_by' => $admin ? $admin->id : null,
+            'status'      => 'approved',
+            'reviewed_by' => $admin?->id,
             'reviewed_at' => now(),
         ]);
 
-        // Mark the user's email as verified if not already.
         if ($verification->user && !$verification->user->email_verified_at) {
             $verification->user->update(['email_verified_at' => now()]);
         }
 
-        // Notify the user about verification approval
         if ($verification->user) {
             \App\Services\NotificationService::verificationApproved(
                 $verification->user_id,
@@ -173,7 +159,17 @@ class VerificationController extends BaseApiController
             );
         }
 
-        return $this->sendResponse($verification->fresh()->load(['user', 'reviewer']), 'Verification approved successfully.');
+        // Audit log.
+        AuditService::verificationApproved($verification->id, $admin->id, [
+            'user_id'   => $verification->user_id,
+            'user_name' => $verification->user?->name,
+            'type'      => $verification->type ?? 'identity',
+        ]);
+
+        return $this->sendResponse(
+            $verification->fresh()->load(['user', 'reviewer']),
+            'Verification approved successfully.'
+        );
     }
 
     public function reject(Request $request, Verification $verification): JsonResponse
@@ -182,20 +178,17 @@ class VerificationController extends BaseApiController
             return $this->sendError('Only pending verifications can be rejected.', [], 422);
         }
 
-        $request->validate([
-            'reason' => 'nullable|string|max:1000',
-        ]);
+        $request->validate(['reason' => 'nullable|string|max:1000']);
 
         $admin = $request->user();
 
         $verification->update([
-            'status' => 'rejected',
-            'reason' => $request->input('reason'),
-            'reviewed_by' => $admin ? $admin->id : null,
+            'status'      => 'rejected',
+            'reason'      => $request->input('reason'),
+            'reviewed_by' => $admin?->id,
             'reviewed_at' => now(),
         ]);
 
-        // Notify the user about verification rejection
         if ($verification->user) {
             \App\Services\NotificationService::verificationRejected(
                 $verification->user_id,
@@ -204,88 +197,105 @@ class VerificationController extends BaseApiController
             );
         }
 
-        return $this->sendResponse($verification->fresh()->load(['user', 'reviewer']), 'Verification rejected successfully.');
+        // Audit log.
+        AuditService::verificationRejected($verification->id, $admin->id, [
+            'user_id'   => $verification->user_id,
+            'user_name' => $verification->user?->name,
+            'reason'    => $request->input('reason'),
+            'type'      => $verification->type ?? 'identity',
+        ]);
+
+        return $this->sendResponse(
+            $verification->fresh()->load(['user', 'reviewer']),
+            'Verification rejected successfully.'
+        );
     }
 
-    /**
-     * Approve a credential.
-     *
-     * If the credential requires a test and the test hasn't been passed yet,
-     * admin can still approve, but the test_status is respected separately.
-     * Dream More LMS certificates are auto-verified via webhook — admin approval
-     * is only for external credentials.
-     */
     public function approveCredential(Request $request, Credential $credential): JsonResponse
     {
         if ($credential->status !== 'pending') {
             return $this->sendError('Only pending credentials can be approved.', [], 422);
         }
 
-        // Cannot manually approve LMS-verified certificates via admin
-        // They should come through the trusted LMS webhook
         if ($credential->auto_verified && $credential->verification_source === 'dream_more_lms') {
-            return $this->sendError('Dream More LMS certificates cannot be manually approved. They are auto-verified through the LMS integration.', [], 422);
+            return $this->sendError(
+                'Dream More LMS certificates cannot be manually approved. They are auto-verified through the LMS integration.',
+                [],
+                422
+            );
         }
 
-        $admin = $request->user();
-
+        $admin      = $request->user();
         $updateData = [
-            'status' => 'approved',
+            'status'      => 'approved',
             'reviewed_by' => $admin->id,
             'reviewed_at' => now(),
         ];
 
-        // If test was required but not yet passed, we still allow admin to approve
-        // but the test_status will reflect the actual test result
         if ($credential->test_required && $credential->test_status !== 'passed') {
-            $updateData['test_status'] = 'passed'; // Admin override
+            $updateData['test_status'] = 'passed';
         }
 
         $credential->update($updateData);
 
-        // Create notification for the freelancer
-        \App\Models\Notification::create([
+        Notification::create([
             'user_id' => $credential->user_id,
-            'type' => 'credential_approved',
-            'title' => 'Credential Approved',
+            'type'    => 'credential_approved',
+            'title'   => 'Credential Approved',
             'message' => "Your credential '{$credential->title}' has been approved.",
-            'link' => '/freelancer/credentials',
+            'link'    => '/freelancer/credentials',
         ]);
 
-        return $this->sendResponse($credential->fresh()->load(['user', 'reviewer']), 'Credential approved successfully.');
+        // Audit log.
+        AuditService::credentialApproved($credential->id, $admin->id, [
+            'user_id'          => $credential->user_id,
+            'user_name'        => $credential->user?->name,
+            'credential_title' => $credential->title,
+        ]);
+
+        return $this->sendResponse(
+            $credential->fresh()->load(['user', 'reviewer']),
+            'Credential approved successfully.'
+        );
     }
 
-    /**
-     * Reject a credential.
-     */
     public function rejectCredential(Request $request, Credential $credential): JsonResponse
     {
         if ($credential->status !== 'pending') {
             return $this->sendError('Only pending credentials can be rejected.', [], 422);
         }
 
-        $request->validate([
-            'reason' => 'nullable|string|max:1000',
-        ]);
+        $request->validate(['reason' => 'nullable|string|max:1000']);
 
         $admin = $request->user();
 
         $credential->update([
-            'status' => 'rejected',
+            'status'           => 'rejected',
             'rejection_reason' => $request->input('reason'),
-            'reviewed_by' => $admin->id,
-            'reviewed_at' => now(),
+            'reviewed_by'      => $admin->id,
+            'reviewed_at'      => now(),
         ]);
 
-        // Create notification for the freelancer
-        \App\Models\Notification::create([
+        Notification::create([
             'user_id' => $credential->user_id,
-            'type' => 'credential_rejected',
-            'title' => 'Credential Rejected',
-            'message' => "Your credential '{$credential->title}' has been rejected." . ($request->input('reason') ? " Reason: {$request->input('reason')}" : ''),
-            'link' => '/freelancer/profile',
+            'type'    => 'credential_rejected',
+            'title'   => 'Credential Rejected',
+            'message' => "Your credential '{$credential->title}' has been rejected."
+                . ($request->input('reason') ? " Reason: {$request->input('reason')}" : ''),
+            'link'    => '/freelancer/profile',
         ]);
 
-        return $this->sendResponse($credential->fresh()->load(['user', 'reviewer']), 'Credential rejected successfully.');
+        // Audit log.
+        AuditService::credentialRejected($credential->id, $admin->id, [
+            'user_id'          => $credential->user_id,
+            'user_name'        => $credential->user?->name,
+            'credential_title' => $credential->title,
+            'reason'           => $request->input('reason'),
+        ]);
+
+        return $this->sendResponse(
+            $credential->fresh()->load(['user', 'reviewer']),
+            'Credential rejected successfully.'
+        );
     }
 }
