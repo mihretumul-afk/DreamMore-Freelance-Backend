@@ -95,10 +95,15 @@ class AuditLog extends Model
     public const ACTION_PAYMENT_PROCESSED = 'payment.processed';
     public const ACTION_PAYMENT_REFUNDED  = 'payment.refunded';
 
-    // ── Action constants — Milestones (Stage 3 forward) ───────────────────
+    // ── Action constants — Milestones ────────────────────────────────────
 
-    public const ACTION_MILESTONE_FUNDED   = 'milestone.funded';
-    public const ACTION_MILESTONE_RELEASED = 'milestone.released';
+    public const ACTION_MILESTONE_FUNDED    = 'milestone.funded';
+    public const ACTION_MILESTONE_RELEASED  = 'milestone.released';
+
+    // ── Action constants — Payment methods ───────────────────────────────
+
+    public const ACTION_PAYMENT_METHOD_ADDED   = 'payment_method.added';
+    public const ACTION_PAYMENT_METHOD_REMOVED = 'payment_method.removed';
 
     // ── Relationships ────────────────────────────────────────────────────
 

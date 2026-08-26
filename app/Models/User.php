@@ -194,6 +194,58 @@ class User extends Authenticatable
         return $this->hasMany(Verification::class)->orderByDesc('created_at');
     }
 
+    // ── Payment relationships ────────────────────────────────────────────
+
+    public function paymentMethods(): HasMany
+    {
+        return $this->hasMany(\App\Models\PaymentMethod::class);
+    }
+
+    public function paymentsAsPayer(): HasMany
+    {
+        return $this->hasMany(\App\Models\Payment::class, 'payer_id');
+    }
+
+    public function paymentsAsPayee(): HasMany
+    {
+        return $this->hasMany(\App\Models\Payment::class, 'payee_id');
+    }
+
+    public function transactions(): HasMany
+    {
+        return $this->hasMany(\App\Models\Transaction::class);
+    }
+
+    /**
+     * Available balance = sum of completed credits - sum of completed debits.
+     * Stage 2 will move this to a dedicated wallet table.
+     */
+    public function getAvailableBalance(): float
+    {
+        $credits = $this->transactions()
+            ->where('direction', \App\Models\Transaction::DIRECTION_CREDIT)
+            ->where('status', \App\Models\Payment::STATUS_COMPLETED)
+            ->sum('amount');
+
+        $debits = $this->transactions()
+            ->where('direction', \App\Models\Transaction::DIRECTION_DEBIT)
+            ->where('status', \App\Models\Payment::STATUS_COMPLETED)
+            ->sum('amount');
+
+        return max(0.0, (float) $credits - (float) $debits);
+    }
+
+    /**
+     * Pending balance = sum of pending/processing credits.
+     */
+    public function getPendingBalance(): float
+    {
+        return (float) $this->transactions()
+            ->where('direction', \App\Models\Transaction::DIRECTION_CREDIT)
+            ->whereIn('status', [\App\Models\Payment::STATUS_PENDING, \App\Models\Payment::STATUS_PROCESSING])
+            ->sum('amount');
+    }
+
     /**
      * Determine whether the freelancer has at least one credential or verification
      * approved by an administrator (or auto-verified via trusted LMS).

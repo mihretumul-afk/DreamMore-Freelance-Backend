@@ -397,4 +397,53 @@ class NotificationService
             '/admin/freelancers?status=pending'
         );
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PAYMENT notifications
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Notify freelancer that a milestone payment has been released to them.
+     */
+    public static function milestonePaid(int $freelancerId, string $milestoneTitle, int $contractId, float $amount): Notification
+    {
+        $formatted = 'ETB ' . number_format($amount, 2);
+        return self::create(
+            $freelancerId,
+            'milestone_paid',
+            'Payment Released',
+            "You received {$formatted} for completing milestone \"{$milestoneTitle}\".",
+            "/freelancer/contracts/{$contractId}"
+        );
+    }
+
+    /**
+     * Notify employer that their escrow funding was successful.
+     */
+    public static function escrowFunded(int $employerId, string $milestoneTitle, int $contractId, float $amount): Notification
+    {
+        $formatted = 'ETB ' . number_format($amount, 2);
+        return self::create(
+            $employerId,
+            'escrow_funded',
+            'Escrow Funded',
+            "{$formatted} has been held in escrow for milestone \"{$milestoneTitle}\".",
+            "/employer/contracts/{$contractId}"
+        );
+    }
+
+    /**
+     * Notify user that a refund has been issued.
+     */
+    public static function paymentRefunded(int $userId, string $reference, float $amount, string $currency = 'ETB'): Notification
+    {
+        $formatted = "{$currency} " . number_format($amount, 2);
+        return self::create(
+            $userId,
+            'payment_refunded',
+            'Refund Issued',
+            "A refund of {$formatted} has been issued for payment {$reference}.",
+            '/freelancer/payments'
+        );
+    }
 }

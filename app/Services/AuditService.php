@@ -402,27 +402,104 @@ class AuditService
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // PAYMENT actions (stubs — wired when payment system is built)
+    // PAYMENT actions
     // ═══════════════════════════════════════════════════════════════════
 
     public static function paymentVerified(int $paymentId, int $actorId, array $context = []): AuditLog
     {
-        $label = self::actorLabel($actorId);
+        $label     = self::actorLabel($actorId);
+        $reference = $context['reference'] ?? "Payment #{$paymentId}";
+        $amount    = isset($context['amount'], $context['currency'])
+            ? "{$context['currency']} {$context['amount']}"
+            : '';
         return self::log(
             AuditLog::ACTION_PAYMENT_VERIFIED, AuditLog::MODULE_PAYMENTS,
             'Payment', $paymentId, $context, $actorId,
-            "{$label} verified payment #{$paymentId}"
+            "{$label} verified payment {$reference}" . ($amount ? " ({$amount})" : '')
         );
     }
 
     public static function paymentRefunded(int $paymentId, int $actorId, array $context = []): AuditLog
     {
-        $label  = self::actorLabel($actorId);
-        $amount = $context['amount'] ?? '';
+        $label     = self::actorLabel($actorId);
+        $reference = $context['reference'] ?? "Payment #{$paymentId}";
+        $amount    = isset($context['refund_amount'], $context['currency'])
+            ? "{$context['currency']} {$context['refund_amount']}"
+            : '';
+        $reason = $context['reason'] ?? '';
         return self::log(
             AuditLog::ACTION_PAYMENT_REFUNDED, AuditLog::MODULE_PAYMENTS,
             'Payment', $paymentId, $context, $actorId,
-            "{$label} issued refund" . ($amount ? " of {$amount}" : '') . " for payment #{$paymentId}"
+            "{$label} issued refund" . ($amount ? " of {$amount}" : '') . " for {$reference}" . ($reason ? " — {$reason}" : '')
+        );
+    }
+
+    public static function paymentProcessed(int $paymentId, int $actorId, array $context = []): AuditLog
+    {
+        $label     = self::actorLabel($actorId);
+        $reference = $context['reference'] ?? "Payment #{$paymentId}";
+        return self::log(
+            AuditLog::ACTION_PAYMENT_PROCESSED, AuditLog::MODULE_PAYMENTS,
+            'Payment', $paymentId, $context, $actorId,
+            "{$label} processed payment {$reference}"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MILESTONE payment actions
+    // ═══════════════════════════════════════════════════════════════════
+
+    public static function milestoneFunded(int $milestoneId, int $actorId, array $context = []): AuditLog
+    {
+        $label  = self::actorLabel($actorId);
+        $title  = $context['milestone_title'] ?? "Milestone #{$milestoneId}";
+        $amount = isset($context['amount'], $context['currency'])
+            ? "{$context['currency']} {$context['amount']}"
+            : ($context['amount'] ?? '');
+        return self::log(
+            AuditLog::ACTION_MILESTONE_FUNDED, AuditLog::MODULE_MILESTONES,
+            'Milestone', $milestoneId, $context, $actorId,
+            "{$label} funded escrow for milestone \"{$title}\"" . ($amount ? " — {$amount}" : '')
+        );
+    }
+
+    public static function milestoneReleased(int $milestoneId, int $actorId, array $context = []): AuditLog
+    {
+        $label  = self::actorLabel($actorId);
+        $title  = $context['milestone_title'] ?? "Milestone #{$milestoneId}";
+        $amount = isset($context['net_amount'], $context['currency'])
+            ? "{$context['currency']} {$context['net_amount']}"
+            : ($context['net_amount'] ?? '');
+        return self::log(
+            AuditLog::ACTION_MILESTONE_RELEASED, AuditLog::MODULE_MILESTONES,
+            'Milestone', $milestoneId, $context, $actorId,
+            "{$label} released payment for milestone \"{$title}\"" . ($amount ? " — {$amount}" : '')
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PAYMENT METHOD actions
+    // ═══════════════════════════════════════════════════════════════════
+
+    public static function paymentMethodAdded(int $methodId, int $userId, array $context = []): AuditLog
+    {
+        $label = self::actorLabel($userId);
+        $type  = $context['type'] ?? 'payment method';
+        return self::log(
+            AuditLog::ACTION_PAYMENT_METHOD_ADDED, AuditLog::MODULE_PAYMENTS,
+            'PaymentMethod', $methodId, $context, $userId,
+            "{$label} added a {$type} payment method"
+        );
+    }
+
+    public static function paymentMethodRemoved(int $methodId, int $userId, array $context = []): AuditLog
+    {
+        $label = self::actorLabel($userId);
+        $label_desc = $context['display_label'] ?? "method #{$methodId}";
+        return self::log(
+            AuditLog::ACTION_PAYMENT_METHOD_REMOVED, AuditLog::MODULE_PAYMENTS,
+            'PaymentMethod', $methodId, $context, $userId,
+            "{$label} removed payment method: {$label_desc}"
         );
     }
 }

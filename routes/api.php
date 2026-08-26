@@ -180,6 +180,8 @@ use App\Http\Controllers\Api\V1\Admin\RoleController;
 use App\Http\Controllers\Api\V1\Admin\PermissionController;
 use App\Http\Controllers\Api\V1\Admin\AdminUserController;
 use App\Http\Controllers\Api\V1\Admin\AdminSecurityController;
+use App\Http\Controllers\Api\V1\Admin\PaymentController as AdminPaymentController;
+use App\Http\Controllers\Api\V1\Admin\TransactionController as AdminTransactionController;
 use App\Http\Controllers\Api\V1\AvatarController;
 use App\Http\Controllers\Api\V1\CredentialController;
 use App\Http\Controllers\Api\V1\MessageController;
@@ -323,6 +325,26 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     // ── Audit logs ───────────────────────────────────────────────────────
     Route::get('/audit-logs', [AdminUserController::class, 'auditLogs'])
         ->middleware('permission:audit_logs.view');
+
+    // ── Payment management ───────────────────────────────────────────────
+    Route::get('/payments/stats', [AdminPaymentController::class, 'stats'])
+        ->middleware('permission:payments.view');
+    Route::get('/payments',                      [AdminPaymentController::class, 'index'])
+        ->middleware('permission:payments.view');
+    Route::get('/payments/{payment}',            [AdminPaymentController::class, 'show'])
+        ->middleware('permission:payments.view');
+    Route::put('/payments/{payment}/verify',     [AdminPaymentController::class, 'verify'])
+        ->middleware('permission:payments.verify');
+    Route::post('/payments/{payment}/refund',    [AdminPaymentController::class, 'refund'])
+        ->middleware('permission:payments.refund');
+
+    // ── Transaction management ────────────────────────────────────────────
+    Route::get('/transactions',                  [AdminTransactionController::class, 'index'])
+        ->middleware('permission:transactions.view');
+    Route::get('/transactions/export',           [AdminTransactionController::class, 'export'])
+        ->middleware('permission:transactions.export');
+    Route::get('/transactions/{transaction}',    [AdminTransactionController::class, 'show'])
+        ->middleware('permission:transactions.view');
 });
 
 // Avatar management (all authenticated users)
@@ -392,6 +414,36 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/recommendations/jobs', [RecommendationController::class, 'jobs']);
     Route::get('/recommendations/freelancers', [RecommendationController::class, 'freelancers']);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Payment System — user-facing endpoints
+// All require auth:sanctum. Users see only their own data.
+// ─────────────────────────────────────────────────────────────────────────────
+use App\Http\Controllers\Api\V1\PaymentController;
+
+Route::middleware('auth:sanctum')->prefix('payments')->group(function () {
+    // Balance summary (works for both freelancers and employers)
+    Route::get('/balance', [PaymentController::class, 'balance']);
+
+    // Payment methods
+    Route::get('/methods',                     [PaymentController::class, 'listMethods']);
+    Route::post('/methods',                    [PaymentController::class, 'addMethod']);
+    Route::get('/methods/{paymentMethod}',     [PaymentController::class, 'showMethod']);
+    Route::put('/methods/{paymentMethod}/default', [PaymentController::class, 'setDefaultMethod']);
+    Route::delete('/methods/{paymentMethod}',  [PaymentController::class, 'removeMethod']);
+
+    // Transaction history
+    Route::get('/transactions',                [PaymentController::class, 'transactions']);
+    Route::get('/transactions/{transaction}',  [PaymentController::class, 'showTransaction']);
+});
+
+// Milestone escrow & release (nested under contracts for REST consistency)
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/contracts/{contract}/milestones/{milestone}/fund',
+        [PaymentController::class, 'fundMilestone']);
+    Route::post('/contracts/{contract}/milestones/{milestone}/release',
+        [PaymentController::class, 'releaseMilestone']);
 });
 
 // Stage 19 — LMS Integration & Skill Tests

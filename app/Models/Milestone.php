@@ -21,6 +21,9 @@ class Milestone extends Model
         'due_date',
         'submitted_at',
         'approved_at',
+        'paid_at',
+        'payment_id',
+        'escrow_funded_at',
     ];
 
     /**
@@ -31,10 +34,12 @@ class Milestone extends Model
     ];
 
     protected $casts = [
-        'amount' => 'decimal:2',
-        'due_date' => 'datetime',
-        'submitted_at' => 'datetime',
-        'approved_at' => 'datetime',
+        'amount'           => 'decimal:2',
+        'due_date'         => 'datetime',
+        'submitted_at'     => 'datetime',
+        'approved_at'      => 'datetime',
+        'paid_at'          => 'datetime',
+        'escrow_funded_at' => 'datetime',
     ];
 
     public function contract(): BelongsTo
@@ -50,5 +55,20 @@ class Milestone extends Model
     public function latestSubmission(): HasOne
     {
         return $this->hasOne(MilestoneSubmission::class)->latestOfMany();
+    }
+
+    public function payment(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Payment::class);
+    }
+
+    public function isEscrowFunded(): bool
+    {
+        return $this->escrow_funded_at !== null;
+    }
+
+    public function isPaid(): bool
+    {
+        return $this->status === 'paid' && $this->paid_at !== null;
     }
 }
