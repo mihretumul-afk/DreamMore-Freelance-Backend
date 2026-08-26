@@ -34,6 +34,11 @@ class MilestoneController extends BaseApiController
     private const SUBMITTABLE_STATUSES = ['pending', 'in_progress', 'revision_requested'];
 
     /**
+     * Milestone statuses that block funding or release.
+     */
+    private const PAYMENT_BLOCKED_STATUSES = ['disputed', 'paid'];
+
+    /**
      * List milestones for a contract the user belongs to.
      */
     public function index(Request $request, Contract $contract): JsonResponse
@@ -71,6 +76,10 @@ class MilestoneController extends BaseApiController
 
         if ($contract->status !== 'active') {
             return $this->sendError('Milestones can only be created on active contracts.', [], 422);
+        }
+
+        if ($contract->status === 'disputed') {
+            return $this->sendError('Milestones cannot be created on disputed contracts.', [], 422);
         }
 
         $milestone = DB::transaction(function () use ($contract, $request) {

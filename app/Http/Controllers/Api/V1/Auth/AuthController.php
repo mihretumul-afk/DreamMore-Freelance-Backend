@@ -57,7 +57,16 @@ class AuthController extends BaseApiController
      */
     public function me(Request $request): JsonResponse
     {
-        $user = $request->user()->load(['freelancerProfile', 'employerProfile']);
+        $user = $request->user();
+        $relations = ['freelancerProfile', 'employerProfile'];
+
+        // For admin users, load RBAC data so the frontend can render
+        // permission-gated UI without an extra API call.
+        if ($user->isAdmin()) {
+            $relations[] = 'adminRoles.permissions';
+        }
+
+        $user->load($relations);
 
         return $this->sendResponse(
             new UserResource($user),

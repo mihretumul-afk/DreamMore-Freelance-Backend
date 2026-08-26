@@ -71,4 +71,16 @@ class Milestone extends Model
     {
         return $this->status === 'paid' && $this->paid_at !== null;
     }
+
+    public function isDisputed(): bool
+    {
+        return $this->status === 'disputed';
+    }
+
+    public function isReleaseable(): bool
+    {
+        return $this->isEscrowFunded()
+            && $this->status === 'approved'
+            && !$this->isDisputed();
+    }
 }

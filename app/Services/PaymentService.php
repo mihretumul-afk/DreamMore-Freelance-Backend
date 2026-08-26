@@ -7,6 +7,7 @@ use App\Models\Milestone;
 use App\Models\Payment;
 use App\Models\PaymentMethod;
 use App\Models\Transaction;
+use App\Services\Payment\ChapaPaymentProvider;
 use App\Services\Payment\ManualPaymentProvider;
 use App\Services\Payment\PaymentProviderInterface;
 use App\Services\Payment\ProviderResult;
@@ -34,9 +35,102 @@ class PaymentService
         $slug = config('payment.provider', env('PAYMENT_PROVIDER', 'manual'));
 
         return match ($slug) {
-            // Add 'chapa' => new ChapaPaymentProvider() in Stage 2
+            'chapa' => new ChapaPaymentProvider(),
             default => new ManualPaymentProvider(),
         };
+    }
+
+    // ── Fee calculation ──────────────────────────────────────────────
+
+    /**
+     * Calculate platform fee and processing fee for a given amount.
+     *
+     * @return array{platform_fee: float, processing_fee: float, total_fee: float, net: float}
+     */
+    public static function calculateFees(float $amount): array
+    {
+        $platformFeeRate    = config('payment.platform_fee_rate', 0.05);
+        $processingFeeRate  = config('payment.processing_fee_rate', 0.02);
+
+        $platformFee   = round($amount * $platformFeeRate, 2);
+        $processingFee = round($amount * $processingFeeRate, 2);
+        $totalFee      = $platformFee + $processingFee;
+        $net           = $amount - $totalFee;
+
+        return [
+            'platform_fee'   => $platformFee,
+            'processing_fee' => $processingFee,
+            'total_fee'      => $totalFee,
+            'net'            => max(0.0, $net),
+        ];
+    }
+
+    /**
+     * Get the current payment provider instance.
+     */
+    public static function getProvider(): PaymentProviderInterface
+    {
+        return self::resolveProvider();
+    }
+
+    /**
+     * Verify a payment server-side with the provider.
+     * Never trusts the frontend — always verifies with the gateway.
+     */
+    public static function verifyPayment(Payment $payment): Payment
+    {
+        $provider = self::resolveProvider();
+
+        $result = $provider->verify($payment);
+
+        if ($result->success) {
+            $raw = $result->raw;
+            $chapaStatus = $raw['data']['status'] ?? '';
+            $mappedStatus = $provider instanceof ChapaPaymentProvider
+                ? $provider->mapWebhookStatus($chapaStatus)
+                : Payment::STATUS_COMPLETED;
+
+            if ($mappedStatus === Payment::STATUS_COMPLETED && $payment->status !== Payment::STATUS_COMPLETED) {
+                $payment->update([
+                    'status'             => Payment::STATUS_COMPLETED,
+                    'provider_reference' => $result->reference ?? $payment->provider_reference,
+                    'provider_response'  => $result->raw,
+                    'processed_at'       => now(),
+                ]);
+
+                // Mirror on transactions
+                Transaction::where('payment_id', $payment->id)
+                    ->update(['status' => Payment::STATUS_COMPLETED]);
+
+                AuditService::paymentVerified($payment->id, null, [
+                    'reference' => $payment->reference,
+                    'amount'    => $payment->amount,
+                    'currency'  => $payment->currency,
+                ]);
+            } elseif ($mappedStatus === Payment::STATUS_FAILED && $payment->status !== Payment::STATUS_FAILED) {
+                $payment->update([
+                    'status'            => Payment::STATUS_FAILED,
+                    'failed_at'         => now(),
+                    'failure_reason'    => 'Payment verification returned: ' . $chapaStatus,
+                    'provider_response' => $result->raw,
+                ]);
+
+                Transaction::where('payment_id', $payment->id)
+                    ->update(['status' => Payment::STATUS_FAILED]);
+
+                // Notify user of payment failure
+                \App\Services\NotificationService::paymentFailed(
+                    $payment->payer_id,
+                    $payment->reference,
+                    (float) $payment->amount,
+                    $payment->milestone?->title ?? 'Unknown',
+                    $payment->contract?->title ?? 'Unknown',
+                    'Payment verification returned: ' . $chapaStatus
+                );
+            }
+        }
+
+        return $payment->fresh();
     }
 
     // ── Payment Method management ────────────────────────────────────────
@@ -136,8 +230,9 @@ class PaymentService
         }
 
         $provider = self::resolveProvider();
-        $fee      = round((float) $milestone->amount * Payment::FEE_RATE, 2);
-        $net      = (float) $milestone->amount - $fee;
+        $fees     = self::calculateFees((float) $milestone->amount);
+        $fee      = $fees['total_fee'];
+        $net      = $fees['net'];
 
         return DB::transaction(function () use (
             $contract, $milestone, $paymentMethod, $fee, $net, $provider, $actorId
@@ -169,6 +264,17 @@ class PaymentService
                     'failure_reason' => $result->message,
                     'provider_response' => $result->raw,
                 ]);
+
+                // Notify employer of payment failure
+                \App\Services\NotificationService::paymentFailed(
+                    $contract->employer_id,
+                    $payment->reference,
+                    (float) $milestone->amount,
+                    $milestone->title,
+                    $contract->title,
+                    $result->message
+                );
+
                 throw new \RuntimeException("Payment failed: {$result->message}");
             }
 
@@ -237,8 +343,9 @@ class PaymentService
         }
 
         $provider = self::resolveProvider();
-        $fee      = round((float) $milestone->amount * Payment::FEE_RATE, 2);
-        $net      = (float) $milestone->amount - $fee;
+        $fees     = self::calculateFees((float) $milestone->amount);
+        $fee      = $fees['total_fee'];
+        $net      = $fees['net'];
 
         return DB::transaction(function () use (
             $contract, $milestone, $fee, $net, $provider, $actorId
@@ -694,56 +801,72 @@ class PaymentService
 
     public static function getBalanceSummary(int $userId): array
     {
+        // Total earned from all completed credit transactions (excluding refunds)
         $totalEarned = Transaction::where('user_id', $userId)
             ->where('direction', Transaction::DIRECTION_CREDIT)
             ->where('status', Payment::STATUS_COMPLETED)
             ->whereNotIn('type', [Payment::TYPE_REFUND])
             ->sum('amount');
 
+        // Total spent from all completed debit transactions (excluding refunds)
         $totalSpent = Transaction::where('user_id', $userId)
             ->where('direction', Transaction::DIRECTION_DEBIT)
             ->where('status', Payment::STATUS_COMPLETED)
             ->whereNotIn('type', [Payment::TYPE_REFUND])
             ->sum('amount');
 
+        // Pending incoming: credits in pending/processing state
         $pendingIn = Transaction::where('user_id', $userId)
             ->where('direction', Transaction::DIRECTION_CREDIT)
             ->whereIn('status', [Payment::STATUS_PENDING, Payment::STATUS_PROCESSING])
             ->sum('amount');
 
         // Freelancer: pending earnings = escrow funded but not yet released milestones.
-        // We look at milestones where escrow_funded_at is set but paid_at is null,
-        // and this user is the freelancer on the contract.
         $pendingEscrow = \App\Models\Milestone::whereNotNull('escrow_funded_at')
             ->whereNull('paid_at')
             ->whereHas('contract', fn ($q) => $q->where('freelancer_id', $userId))
-            ->whereNotIn('status', ['paid', 'cancelled'])
+            ->whereNotIn('status', ['paid', 'cancelled', 'disputed'])
             ->sum('amount');
 
-        // Net amount for pending escrow (after fee deduction).
+        // Net amount for pending escrow (after fee deduction)
         $pendingEscrowNet = round((float) $pendingEscrow * (1 - Payment::FEE_RATE), 2);
 
-        // Employer: total held in escrow (funded but not released).
+        // Employer: total held in escrow (funded but not released)
         $totalHeldInEscrow = Payment::where('payer_id', $userId)
             ->where('type', Payment::TYPE_ESCROW_FUNDED)
             ->where('status', Payment::STATUS_COMPLETED)
             ->whereHas('milestone', fn ($q) => $q->whereNull('paid_at'))
             ->sum('amount');
 
+        // Total refunded
         $totalRefunded = Transaction::where('user_id', $userId)
             ->where('direction', Transaction::DIRECTION_CREDIT)
             ->where('type', Payment::TYPE_REFUND)
             ->where('status', Payment::STATUS_COMPLETED)
             ->sum('amount');
 
+        // Withdrawn = all completed debit transactions (money taken out)
+        $withdrawn = Transaction::where('user_id', $userId)
+            ->where('direction', Transaction::DIRECTION_DEBIT)
+            ->where('status', Payment::STATUS_COMPLETED)
+            ->sum('amount');
+
         return [
-            'available_balance'   => max(0.0, (float) $totalEarned - (float) $totalSpent),
-            'pending_in'          => (float) $pendingIn,
-            'pending_escrow_net'  => (float) $pendingEscrowNet,  // freelancer: awaiting release
-            'total_held_in_escrow'=> (float) $totalHeldInEscrow, // employer: held funds
+            // Freelancer categories
+            'pending_earnings'    => (float) $pendingEscrowNet,
+            'available_earnings'  => max(0.0, (float) $totalEarned - (float) $totalSpent - (float) $pendingEscrowNet),
             'total_earned'        => (float) $totalEarned,
-            'total_spent'         => (float) $totalSpent,
+            'withdrawn'           => (float) $withdrawn,
             'total_refunded'      => (float) $totalRefunded,
+
+            // Employer categories
+            'available_balance'   => max(0.0, (float) $totalEarned - (float) $totalSpent),
+            'total_held_in_escrow'=> (float) $totalHeldInEscrow,
+            'total_spent'         => (float) $totalSpent,
+
+            // Shared
+            'pending_in'          => (float) $pendingIn,
+            'pending_escrow_net'  => (float) $pendingEscrowNet,
             'currency'            => 'ETB',
         ];
     }

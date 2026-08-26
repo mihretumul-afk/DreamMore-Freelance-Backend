@@ -24,6 +24,12 @@ class AdminMaintenanceLoginTest extends TestCase
             'role'     => 'admin',
             'status'   => 'active',
         ]);
+        // Assign super_admin role so the admin has full access in tests.
+        $superAdminRole = \App\Models\Role::firstOrCreate(
+            ['slug' => \App\Models\Role::SUPER_ADMIN],
+            ['name' => 'Super Admin', 'is_system' => true, 'is_active' => true]
+        );
+        $this->admin->adminRoles()->attach($superAdminRole->id);
     }
 
     /**

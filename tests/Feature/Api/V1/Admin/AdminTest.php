@@ -38,6 +38,12 @@ class AdminTest extends TestCase
         ]);
         $this->adminToken = $this->admin->createToken('admin_token')->plainTextToken;
 
+        // Assign super_admin role so the admin has full access in tests.
+        $superAdminRole = \App\Models\Role::firstOrCreate(
+            ['slug' => \App\Models\Role::SUPER_ADMIN],
+            ['name' => 'Super Admin', 'is_system' => true, 'is_active' => true]
+        );
+        $this->admin->adminRoles()->attach($superAdminRole->id);
         $this->employer = User::create([
             'name' => 'Employer User',
             'email' => 'employer@test.com',

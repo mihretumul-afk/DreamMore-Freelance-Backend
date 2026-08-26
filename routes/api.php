@@ -14,6 +14,10 @@ use App\Http\Controllers\Api\V1\ProposalController;
 use App\Http\Controllers\Api\V1\SkillController;
 use App\Http\Controllers\Api\V1\PlatformSettingsController;
 use App\Http\Controllers\Api\V1\VerificationSubmissionController;
+use App\Http\Controllers\Api\V1\PaymentController;
+use App\Http\Controllers\Api\V1\WebhookController;
+use App\Http\Controllers\Api\V1\WithdrawalController;
+use App\Http\Controllers\Api\V1\Admin\WithdrawalController as AdminWithdrawalController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -338,6 +342,14 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     Route::post('/payments/{payment}/refund',    [AdminPaymentController::class, 'refund'])
         ->middleware('permission:payments.refund');
 
+    // ── Refund request management ────────────────────────────────────────
+    Route::get('/refund-requests',               [AdminPaymentController::class, 'refundRequests'])
+        ->middleware('permission:payments.refund');
+    Route::put('/payments/{payment}/refund-approve', [AdminPaymentController::class, 'approveRefund'])
+        ->middleware('permission:payments.refund');
+    Route::put('/payments/{payment}/refund-reject',  [AdminPaymentController::class, 'rejectRefund'])
+        ->middleware('permission:payments.refund');
+
     // ── Transaction management ────────────────────────────────────────────
     Route::get('/transactions',                  [AdminTransactionController::class, 'index'])
         ->middleware('permission:transactions.view');
@@ -345,6 +357,18 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
         ->middleware('permission:transactions.export');
     Route::get('/transactions/{transaction}',    [AdminTransactionController::class, 'show'])
         ->middleware('permission:transactions.view');
+
+    // ── Withdrawal management ──────────────────────────────────────────
+    Route::get('/withdrawals',                   [AdminWithdrawalController::class, 'index'])
+        ->middleware('permission:withdrawals.view');
+    Route::get('/withdrawals/{withdrawal}',      [AdminWithdrawalController::class, 'show'])
+        ->middleware('permission:withdrawals.view');
+    Route::put('/withdrawals/{withdrawal}/process',  [AdminWithdrawalController::class, 'process'])
+        ->middleware('permission:withdrawals.manage');
+    Route::put('/withdrawals/{withdrawal}/complete', [AdminWithdrawalController::class, 'complete'])
+        ->middleware('permission:withdrawals.manage');
+    Route::put('/withdrawals/{withdrawal}/fail',     [AdminWithdrawalController::class, 'fail'])
+        ->middleware('permission:withdrawals.manage');
 });
 
 // Avatar management (all authenticated users)
@@ -420,7 +444,8 @@ Route::middleware('auth:sanctum')->group(function () {
 // Payment System — user-facing endpoints
 // All require auth:sanctum. Users see only their own data.
 // ─────────────────────────────────────────────────────────────────────────────
-use App\Http\Controllers\Api\V1\PaymentController;
+// ── Webhooks (no auth — verified by provider signature) ──────────────
+Route::post('/payments/webhook/chapa', [WebhookController::class, 'chapaWebhook']);
 
 Route::middleware('auth:sanctum')->prefix('payments')->group(function () {
     // Balance summary (works for both freelancers and employers)
@@ -436,6 +461,21 @@ Route::middleware('auth:sanctum')->prefix('payments')->group(function () {
     // Transaction history
     Route::get('/transactions',                [PaymentController::class, 'transactions']);
     Route::get('/transactions/{transaction}',  [PaymentController::class, 'showTransaction']);
+
+    // Refund requests
+    Route::get('/refund-requests',              [PaymentController::class, 'myRefundRequests']);
+
+    // Payment verification (manual trigger)
+    Route::get('/verify/{reference}',          [WebhookController::class, 'verifyPayment']);
+
+    // Fee calculation (preview before checkout)
+    Route::post('/calculate-fees',             [PaymentController::class, 'calculateFees']);
+
+    // Withdrawals
+    Route::get('/withdrawals',                 [WithdrawalController::class, 'index']);
+    Route::get('/withdrawals/{withdrawal}',    [WithdrawalController::class, 'show']);
+    Route::post('/withdrawals',                [WithdrawalController::class, 'store']);
+    Route::post('/withdrawals/{withdrawal}/cancel', [WithdrawalController::class, 'cancel']);
 });
 
 // Milestone escrow & release (nested under contracts for REST consistency)
@@ -444,6 +484,8 @@ Route::middleware('auth:sanctum')->group(function () {
         [PaymentController::class, 'fundMilestone']);
     Route::post('/contracts/{contract}/milestones/{milestone}/release',
         [PaymentController::class, 'releaseMilestone']);
+    Route::post('/contracts/{contract}/milestones/{milestone}/refund-request',
+        [PaymentController::class, 'requestMilestoneRefund']);
 });
 
 // Stage 19 — LMS Integration & Skill Tests

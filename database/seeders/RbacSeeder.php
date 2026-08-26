@@ -47,6 +47,10 @@ class RbacSeeder extends Seeder
         'transactions.view'   => ['View Transactions',   'transactions', 'View transaction history'],
         'transactions.export' => ['Export Transactions', 'transactions', 'Export transaction data to CSV/Excel'],
 
+        // ── Withdrawals ──────────────────────────────────────────────────
+        'withdrawals.view'    => ['View Withdrawals',    'withdrawals', 'View withdrawal requests and history'],
+        'withdrawals.manage'  => ['Manage Withdrawals',  'withdrawals', 'Process, complete, or fail withdrawal requests'],
+
         // ── Disputes ──────────────────────────────────────────────────────
         'disputes.view'     => ['View Disputes',     'disputes', 'View reported disputes and reports'],
         'disputes.review'   => ['Review Disputes',   'disputes', 'Review and investigate disputes'],
@@ -117,7 +121,7 @@ class RbacSeeder extends Seeder
 
         Role::FINANCE_ADMIN => [
             'name'        => 'Finance Admin',
-            'description' => 'Manages payments, milestones, and transactions. Cannot manage admins or roles.',
+            'description' => 'Manages payments, milestones, transactions, and withdrawals. Cannot manage admins or roles.',
             'permissions' => [
                 'users.view',
                 'payments.view',
@@ -129,6 +133,8 @@ class RbacSeeder extends Seeder
                 'milestones.release',
                 'transactions.view',
                 'transactions.export',
+                'withdrawals.view',
+                'withdrawals.manage',
                 'audit_logs.view',
                 'settings.view',
                 'admin_account.view',

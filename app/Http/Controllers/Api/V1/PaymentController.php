@@ -212,6 +212,23 @@ class PaymentController extends BaseApiController
     }
 
     /**
+     * POST /payments/calculate-fees
+     * Preview fees for a given amount before checkout.
+     */
+    public function calculateFees(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'amount'   => ['required', 'numeric', 'min:0.01'],
+            'currency' => ['sometimes', 'string', 'size:3'],
+        ]);
+
+        $fees = PaymentService::calculateFees((float) $validated['amount']);
+        $fees['currency'] = $validated['currency'] ?? 'ETB';
+
+        return $this->sendResponse($fees, 'Fee calculation retrieved.');
+    }
+
+    /**
      * GET /payments/transactions/{transaction}
      */
     public function showTransaction(Request $request, Transaction $transaction): JsonResponse
@@ -237,6 +254,7 @@ class PaymentController extends BaseApiController
      * POST /contracts/{contract}/milestones/{milestone}/fund
      *
      * Employer funds a milestone into escrow.
+     * Cannot fund disputed milestones.
      */
     public function fundMilestone(Request $request, Contract $contract, Milestone $milestone): JsonResponse
     {
@@ -248,6 +266,14 @@ class PaymentController extends BaseApiController
 
         if ($milestone->contract_id !== $contract->id) {
             return $this->sendError('Milestone does not belong to this contract.', [], 422);
+        }
+
+        // Prevent funding of disputed milestones
+        if ($milestone->status === 'disputed' || $contract->status === 'disputed') {
+            return $this->sendError(
+                'This milestone or contract is currently under dispute. Funding is frozen until the dispute is resolved.',
+                [], 422
+            );
         }
 
         $validated = $request->validate([
@@ -286,6 +312,7 @@ class PaymentController extends BaseApiController
      * POST /contracts/{contract}/milestones/{milestone}/release
      *
      * Employer releases an approved milestone's escrow to the freelancer.
+     * Cannot release disputed milestones.
      */
     public function releaseMilestone(Request $request, Contract $contract, Milestone $milestone): JsonResponse
     {
@@ -297,6 +324,22 @@ class PaymentController extends BaseApiController
 
         if ($milestone->contract_id !== $contract->id) {
             return $this->sendError('Milestone does not belong to this contract.', [], 422);
+        }
+
+        // Prevent release of disputed milestones
+        if ($milestone->status === 'disputed') {
+            return $this->sendError(
+                'This milestone is currently under dispute. Payment release is frozen until the dispute is resolved by an administrator.',
+                [], 422
+            );
+        }
+
+        // Also check if the contract is disputed
+        if ($contract->status === 'disputed') {
+            return $this->sendError(
+                'This contract is currently under dispute. Payment release is frozen until the dispute is resolved.',
+                [], 422
+            );
         }
 
         try {

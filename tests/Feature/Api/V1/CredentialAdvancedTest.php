@@ -27,12 +27,18 @@ class CredentialAdvancedTest extends TestCase
 
     private function createAdmin(): User
     {
-        return User::create([
+        $admin = User::create([
             'name' => 'Test Admin',
             'email' => 'admin_' . uniqid() . '@example.com',
             'password' => bcrypt('password123'),
             'role' => 'admin',
         ]);
+        $superAdminRole = \App\Models\Role::firstOrCreate(
+            ['slug' => \App\Models\Role::SUPER_ADMIN],
+            ['name' => 'Super Admin', 'is_system' => true, 'is_active' => true]
+        );
+        $admin->adminRoles()->attach($superAdminRole->id);
+        return $admin;
     }
 
     private function createEmployer(): User

@@ -105,6 +105,30 @@ class AuditLog extends Model
     public const ACTION_PAYMENT_METHOD_ADDED   = 'payment_method.added';
     public const ACTION_PAYMENT_METHOD_REMOVED = 'payment_method.removed';
 
+    // ── Action constants — Withdrawals ──────────────────────────────────
+
+    public const ACTION_WITHDRAWAL_REQUESTED = 'withdrawal.requested';
+    public const ACTION_WITHDRAWAL_PROCESSED = 'withdrawal.processed';
+    public const ACTION_WITHDRAWAL_COMPLETED = 'withdrawal.completed';
+    public const ACTION_WITHDRAWAL_FAILED    = 'withdrawal.failed';
+    public const ACTION_WITHDRAWAL_CANCELLED = 'withdrawal.cancelled';
+
+    // ── Action constants — Webhooks ─────────────────────────────────────
+
+    public const ACTION_WEBHOOK_RECEIVED     = 'webhook.received';
+    public const ACTION_WEBHOOK_PROCESSED    = 'webhook.processed';
+    public const ACTION_WEBHOOK_FAILED       = 'webhook.failed';
+
+    // ── Action constants — Payment failures ──────────────────────────────
+
+    public const ACTION_PAYMENT_FAILED       = 'payment.failed';
+    public const ACTION_PAYMENT_CANCELLED    = 'payment.cancelled';
+
+    // ── Module constants (additional) ────────────────────────────────────
+
+    public const MODULE_WITHDRAWALS = 'withdrawals';
+    public const MODULE_WEBHOOKS    = 'webhooks';
+
     // ── Relationships ────────────────────────────────────────────────────
 
     public function actor(): BelongsTo

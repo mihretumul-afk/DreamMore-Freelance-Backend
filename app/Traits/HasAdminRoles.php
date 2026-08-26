@@ -47,17 +47,13 @@ trait HasAdminRoles
             return false;
         }
 
-        // Explicit super_admin role assignment.
-        if ($this->adminRoles()
+        // ONLY the explicit super_admin role grants Super Admin access.
+        // An admin with zero sub-roles is NOT a Super Admin — they must
+        // be explicitly assigned the super_admin role.
+        return $this->adminRoles()
             ->where('slug', Role::SUPER_ADMIN)
             ->where('is_active', true)
-            ->exists()) {
-            return true;
-        }
-
-        // Backward-compatible bootstrap: an admin with zero sub-roles
-        // is treated as Super Admin so existing setups are not broken.
-        return $this->adminRoles()->count() === 0;
+            ->exists();
     }
 
     /**

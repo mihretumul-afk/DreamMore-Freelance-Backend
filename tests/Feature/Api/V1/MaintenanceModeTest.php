@@ -26,7 +26,13 @@ class MaintenanceModeTest extends TestCase
             'status'   => 'active',
         ]);
         $this->adminToken = $this->admin->createToken('admin_token')->plainTextToken;
-    }
+
+        // Assign super_admin role so the admin has full access in tests.
+        $superAdminRole = \App\Models\Role::firstOrCreate(
+            ['slug' => \App\Models\Role::SUPER_ADMIN],
+            ['name' => 'Super Admin', 'is_system' => true, 'is_active' => true]
+        );
+        $this->admin->adminRoles()->attach($superAdminRole->id);    }
 
     public function test_public_routes_work_when_maintenance_off(): void
     {

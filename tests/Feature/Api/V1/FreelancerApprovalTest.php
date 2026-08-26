@@ -32,6 +32,12 @@ class FreelancerApprovalTest extends TestCase
             'role'     => 'admin',
             'status'   => 'active',
         ]);
+        // Assign super_admin role so the admin has full access in tests.
+        $superAdminRole = \App\Models\Role::firstOrCreate(
+            ['slug' => \App\Models\Role::SUPER_ADMIN],
+            ['name' => 'Super Admin', 'is_system' => true, 'is_active' => true]
+        );
+        $this->admin->adminRoles()->attach($superAdminRole->id);
         $this->adminToken = $this->admin->createToken('admin_token')->plainTextToken;
 
         $this->employer = User::create([
@@ -317,5 +323,107 @@ class FreelancerApprovalTest extends TestCase
         $this->getJson("/api/v1/freelancers/{$this->freelancer->id}")
              ->assertStatus(200)
              ->assertJsonPath('data.approval_status', 'approved');
+    }
+
+    public function test_credential_approval_refreshes_verification_and_allows_proposal(): void
+    {
+        $category = Category::create(['name' => 'Web Dev', 'slug' => 'web-dev-' . Str::random(4)]);
+        Skill::create(['name' => 'Laravel', 'slug' => 'laravel-' . Str::random(4), 'category_id' => $category->id]);
+
+        $credential = \App\Models\Credential::create([
+            'user_id' => $this->freelancer->id,
+            'title' => 'ID Document',
+            'type' => 'external_certificate',
+            'file_path' => 'credentials/test.pdf',
+            'status' => 'pending',
+        ]);
+        $this->freelancer->freelancerProfile->approve();
+
+        $this->withHeader('Authorization', 'Bearer ' . $this->adminToken)
+             ->putJson("/api/v1/admin/credentials/{$credential->id}/approve")
+             ->assertOk()
+             ->assertJsonPath('data.status', 'approved');
+
+        $this->assertDatabaseHas('credentials', [
+            'id' => $credential->id,
+            'user_id' => $this->freelancer->id,
+            'status' => 'approved',
+        ]);
+
+        // Verify the model directly sees both approvals
+        $freshUser = \App\Models\User::find($this->freelancer->id);
+        $this->assertTrue($freshUser->hasApprovedCredentials(), 'hasApprovedCredentials should return true after credential approval');
+        $this->assertDatabaseHas('freelancer_profiles', [
+            'user_id' => $this->freelancer->id,
+            'approval_status' => 'approved',
+        ]);
+
+        // Verify the combined is_fully_approved check works on the model
+        $profile = $freshUser->freelancerProfile;
+        $this->assertNotNull($profile, 'freelancer profile should exist');
+        $this->assertEquals('approved', $profile->approval_status);
+        $this->assertTrue($freshUser->hasApprovedCredentials());
+
+        // Verify the UserResource exposes is_fully_approved correctly
+        \App\Models\User::unguarded(function () use ($freshUser) {
+            $freshUser->load('freelancerProfile');
+            $resource = new \App\Http\Resources\Api\V1\UserResource($freshUser);
+            $data = $resource->toArray(request());
+            $this->assertTrue($data['is_fully_approved'], 'is_fully_approved should be true when both profile and credentials are approved');
+            $this->assertTrue($data['is_verified']);
+            $this->assertTrue($data['has_approved_credentials']);
+            $this->assertEquals('approved', $data['verification_status']);
+            $this->assertEquals('approved', $data['profile_approval_status']);
+        });
+
+        // Verify proposal submission works (the real end-to-end test)
+        $job = \App\Models\Job::create([
+            'employer_id' => $this->employer->id,
+            'title' => 'Approved Credential Job',
+            'slug' => 'approved-credential-job-' . Str::random(4),
+            'description' => 'A test job.',
+            'status' => 'open',
+        ]);
+
+        $this->withHeader('Authorization', 'Bearer ' . $this->freelancerToken)
+             ->postJson("/api/v1/jobs/{$job->id}/proposals", [
+                 'cover_letter' => 'I can do this.',
+                 'bid_amount' => 1000,
+                 'estimated_duration' => '1 week',
+             ])
+             ->assertStatus(201)
+             ->assertJson(['success' => true]);
+    }
+
+    public function test_fully_approved_field_matches_middleware_dual_check(): void
+    {
+        // Scenario 1: Profile approved, no credentials → not fully approved
+        \App\Models\Credential::create([
+            'user_id' => $this->freelancer->id,
+            'title' => 'ID Document',
+            'type' => 'external_certificate',
+            'file_path' => 'credentials/test.pdf',
+            'status' => 'pending', // NOT approved
+        ]);
+        $this->freelancer->freelancerProfile->approve();
+
+        $user = \App\Models\User::find($this->freelancer->id)->load('freelancerProfile');
+        $resource = new \App\Http\Resources\Api\V1\UserResource($user);
+        $data = $resource->toArray(request());
+        $this->assertFalse($data['is_fully_approved'], 'Should NOT be fully approved when credentials are not approved');
+
+        // Scenario 2: Both approved → fully approved
+        $user->credentials()->where('status', 'pending')->update(['status' => 'approved']);
+        $user->refresh()->load('freelancerProfile');
+        $resource2 = new \App\Http\Resources\Api\V1\UserResource($user);
+        $data2 = $resource2->toArray(request());
+        $this->assertTrue($data2['is_fully_approved'], 'Should be fully approved when both profile and credentials are approved');
+
+        // Scenario 3: Profile pending, credentials approved → not fully approved
+        $user->freelancerProfile->update(['approval_status' => 'pending']);
+        $user->refresh()->load('freelancerProfile');
+        $resource3 = new \App\Http\Resources\Api\V1\UserResource($user);
+        $data3 = $resource3->toArray(request());
+        $this->assertFalse($data3['is_fully_approved'], 'Should NOT be fully approved when profile is pending');
     }
 }

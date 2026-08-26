@@ -502,4 +502,70 @@ class AuditService
             "{$label} removed payment method: {$label_desc}"
         );
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // WITHDRAWAL actions
+    // ═══════════════════════════════════════════════════════════════════
+
+    public static function withdrawalRequested(int $withdrawalId, int $actorId, array $context = []): AuditLog
+    {
+        $label     = self::actorLabel($actorId);
+        $reference = $context['reference'] ?? "Withdrawal #{$withdrawalId}";
+        $amount    = $context['amount'] ?? '';
+        $currency  = $context['currency'] ?? 'ETB';
+        return self::log(
+            AuditLog::ACTION_WITHDRAWAL_REQUESTED, AuditLog::MODULE_WITHDRAWALS,
+            'Withdrawal', $withdrawalId, $context, $actorId,
+            "{$label} requested withdrawal of {$currency} {$amount} ({$reference})"
+        );
+    }
+
+    public static function withdrawalCompleted(int $withdrawalId, int $actorId, array $context = []): AuditLog
+    {
+        $label     = self::actorLabel($actorId);
+        $reference = $context['reference'] ?? "Withdrawal #{$withdrawalId}";
+        $amount    = $context['net_amount'] ?? '';
+        $currency  = $context['currency'] ?? 'ETB';
+        return self::log(
+            AuditLog::ACTION_WITHDRAWAL_COMPLETED, AuditLog::MODULE_WITHDRAWALS,
+            'Withdrawal', $withdrawalId, $context, $actorId,
+            "{$label} completed withdrawal {$reference} — {$currency} {$amount} disbursed"
+        );
+    }
+
+    public static function withdrawalFailed(int $withdrawalId, int $actorId, array $context = []): AuditLog
+    {
+        $label     = self::actorLabel($actorId);
+        $reference = $context['reference'] ?? "Withdrawal #{$withdrawalId}";
+        $reason    = $context['reason'] ?? '';
+        return self::log(
+            AuditLog::ACTION_WITHDRAWAL_FAILED, AuditLog::MODULE_WITHDRAWALS,
+            'Withdrawal', $withdrawalId, $context, $actorId,
+            "{$label} marked withdrawal {$reference} as failed" . ($reason ? ": {$reason}" : '')
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // WEBHOOK actions
+    // ═══════════════════════════════════════════════════════════════════
+
+    public static function webhookReceived(string $provider, string $txRef, array $context = []): AuditLog
+    {
+        return self::log(
+            AuditLog::ACTION_WEBHOOK_RECEIVED, AuditLog::MODULE_WEBHOOKS,
+            'Payment', null, array_merge($context, ['provider' => $provider, 'tx_ref' => $txRef]),
+            null,
+            "Webhook received from {$provider} for transaction {$txRef}"
+        );
+    }
+
+    public static function webhookProcessed(string $provider, string $txRef, array $context = []): AuditLog
+    {
+        return self::log(
+            AuditLog::ACTION_WEBHOOK_PROCESSED, AuditLog::MODULE_WEBHOOKS,
+            'Payment', null, array_merge($context, ['provider' => $provider, 'tx_ref' => $txRef]),
+            null,
+            "Webhook processed from {$provider} for transaction {$txRef}"
+        );
+    }
 }

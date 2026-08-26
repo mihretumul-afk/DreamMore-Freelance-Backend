@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api\V1\Admin;
 use App\Http\Controllers\Api\V1\BaseApiController;
 use App\Models\Payment;
 use App\Models\Transaction;
+use App\Services\AuditService;
+use App\Services\NotificationService;
 use App\Services\PaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -197,5 +199,110 @@ class PaymentController extends BaseApiController
         }
 
         return $this->sendResponse($refundPayment, 'Refund issued successfully.');
+    }
+
+    // ── Refund request management ─────────────────────────────────────
+
+    /**
+     * GET /admin/refund-requests
+     * Lists all pending refund requests for admin review.
+     */
+    public function refundRequests(Request $request): JsonResponse
+    {
+        if (!$request->user()->hasPermission('payments.refund')) {
+            return $this->sendForbidden('You do not have permission to view refund requests.');
+        }
+
+        $query = Payment::where('refund_status', '!=', Payment::REFUND_STATUS_NONE)
+            ->with([
+                'payer:id,name,email',
+                'contract:id,title',
+                'milestone:id,title,amount',
+                'refundRequester:id,name,email',
+                'refundApprover:id,name,email',
+            ])
+            ->orderByDesc('refund_requested_at');
+
+        if ($request->filled('refund_status')) {
+            $query->where('refund_status', $request->input('refund_status'));
+        }
+
+        $payments = $query->paginate(20);
+
+        return $this->sendResponse(
+            $payments->items(),
+            'Refund requests retrieved.',
+            200,
+            [
+                'current_page' => $payments->currentPage(),
+                'last_page'    => $payments->lastPage(),
+                'per_page'     => $payments->perPage(),
+                'total'        => $payments->total(),
+            ]
+        );
+    }
+
+    /**
+     * PUT /admin/payments/{payment}/refund-approve
+     * Approve a pending refund request and process the refund.
+     */
+    public function approveRefund(Request $request, Payment $payment): JsonResponse
+    {
+        if (!$request->user()->hasPermission('payments.refund')) {
+            return $this->sendForbidden('You do not have permission to approve refunds.');
+        }
+
+        if ($payment->refund_status !== Payment::REFUND_STATUS_REQUESTED) {
+            return $this->sendError('This payment does not have a pending refund request.', [], 422);
+        }
+
+        $validated = $request->validate([
+            'amount' => ['nullable', 'numeric', 'min:1'],
+            'note'   => ['nullable', 'string', 'max:500'],
+        ]);
+
+        try {
+            $refund = PaymentService::approveRefund(
+                $payment,
+                $request->user()->id,
+                $validated['amount'] ?? null,
+                $validated['note'] ?? ''
+            );
+        } catch (\RuntimeException $e) {
+            return $this->sendError($e->getMessage(), [], 422);
+        }
+
+        return $this->sendResponse($refund, 'Refund approved and processed successfully.');
+    }
+
+    /**
+     * PUT /admin/payments/{payment}/refund-reject
+     * Reject a pending refund request.
+     */
+    public function rejectRefund(Request $request, Payment $payment): JsonResponse
+    {
+        if (!$request->user()->hasPermission('payments.refund')) {
+            return $this->sendForbidden('You do not have permission to reject refunds.');
+        }
+
+        if ($payment->refund_status !== Payment::REFUND_STATUS_REQUESTED) {
+            return $this->sendError('This payment does not have a pending refund request.', [], 422);
+        }
+
+        $validated = $request->validate([
+            'reason' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        try {
+            $updated = PaymentService::rejectRefund(
+                $payment,
+                $request->user()->id,
+                $validated['reason'] ?? ''
+            );
+        } catch (\RuntimeException $e) {
+            return $this->sendError($e->getMessage(), [], 422);
+        }
+
+        return $this->sendResponse($updated, 'Refund request rejected.');
     }
 }

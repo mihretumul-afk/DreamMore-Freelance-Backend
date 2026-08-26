@@ -48,6 +48,10 @@ class Permission extends Model
     public const TRANSACTIONS_VIEW   = 'transactions.view';
     public const TRANSACTIONS_EXPORT = 'transactions.export';
 
+    // Withdrawals
+    public const WITHDRAWALS_VIEW   = 'withdrawals.view';
+    public const WITHDRAWALS_MANAGE = 'withdrawals.manage';
+
     // Disputes
     public const DISPUTES_VIEW     = 'disputes.view';
     public const DISPUTES_REVIEW   = 'disputes.review';

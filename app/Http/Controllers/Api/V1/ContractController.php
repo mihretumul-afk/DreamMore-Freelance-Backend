@@ -6,8 +6,11 @@ use App\Http\Resources\Api\V1\ContractResource;
 use App\Models\Contract;
 use App\Models\EmployerProfile;
 use App\Models\FreelancerProfile;
+use App\Models\Payment;
 use App\Models\Report;
+use App\Services\AuditService;
 use App\Services\NotificationService;
+use App\Services\PaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -190,6 +193,37 @@ class ContractController extends BaseApiController
                 'description' => $validated['description'] ?? null,
                 'status' => 'pending',
             ]);
+
+            // Mark all funded payments on this contract as disputed
+            // This prevents automatic release of escrow funds
+            $fundedPayments = Payment::where('contract_id', $contract->id)
+                ->whereIn('status', [Payment::STATUS_COMPLETED, Payment::STATUS_PROCESSING])
+                ->where('type', Payment::TYPE_ESCROW_FUNDED)
+                ->get();
+
+            foreach ($fundedPayments as $payment) {
+                PaymentService::markAsDisputed($payment, $user->id);
+            }
+
+            // Mark funded milestones as disputed to prevent release
+            $contract->milestones()
+                ->whereNotNull('escrow_funded_at')
+                ->whereNull('paid_at')
+                ->update(['status' => 'disputed']);
+
+            // Audit log the dispute
+            AuditService::log(
+                \App\Models\AuditLog::ACTION_DISPUTE_RESOLVED,
+                \App\Models\AuditLog::MODULE_DISPUTES,
+                'Contract', $contract->id,
+                [
+                    'reason'     => $validated['reason'],
+                    'action'     => 'dispute_raised',
+                    'payment_count' => $fundedPayments->count(),
+                ],
+                $user->id,
+                "User #{$user->id} raised dispute on contract \"{$contract->title}\" — {$fundedPayments->count()} payment(s) marked as disputed"
+            );
         });
 
         $isEmployer = $contract->employer_id === $user->id;

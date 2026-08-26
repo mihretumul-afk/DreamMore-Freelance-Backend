@@ -6,9 +6,11 @@ use App\Http\Controllers\Api\V1\BaseApiController;
 use App\Models\Contract;
 use App\Models\EmployerProfile;
 use App\Models\FreelancerProfile;
+use App\Models\Payment;
 use App\Models\Report;
 use App\Services\AuditService;
 use App\Services\NotificationService;
+use App\Services\PaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -62,12 +64,14 @@ class ReportController extends BaseApiController
         $request->validate([
             'resolution'      => 'nullable|string|max:2000',
             'contract_action' => 'nullable|in:active,completed,cancelled',
+            'payment_action'  => 'nullable|in:release,refund,hold',
         ]);
 
         $contractAction = $request->input('contract_action', 'active');
+        $paymentAction  = $request->input('payment_action', 'hold');
         $actor          = $request->user();
 
-        DB::transaction(function () use ($report, $request, $contractAction, $actor) {
+        DB::transaction(function () use ($report, $request, $contractAction, $paymentAction, $actor) {
             $report->update([
                 'status'      => 'resolved',
                 'resolution'  => $request->input('resolution'),
@@ -99,6 +103,64 @@ class ReportController extends BaseApiController
                         }
                     }
 
+                    // Handle payment decisions for disputed milestones
+                    if ($paymentAction !== 'hold') {
+                        $disputedMilestones = $contract->milestones()
+                            ->where('status', 'disputed')
+                            ->whereNotNull('escrow_funded_at')
+                            ->whereNull('paid_at')
+                            ->get();
+
+                        foreach ($disputedMilestones as $milestone) {
+                            if ($paymentAction === 'release') {
+                                // Release payment to freelancer
+                                try {
+                                    PaymentService::releaseMilestonePayment(
+                                        $contract,
+                                        $milestone,
+                                        $actor->id
+                                    );
+                                } catch (\RuntimeException $e) {
+                                    // Log but don't fail the whole resolution
+                                    AuditService::log(
+                                        \App\Models\AuditLog::ACTION_PAYMENT_PROCESSED,
+                                        \App\Models\AuditLog::MODULE_PAYMENTS,
+                                        'Milestone', $milestone->id,
+                                        ['error' => $e->getMessage()],
+                                        $actor->id,
+                                        "Failed to release payment for milestone \"{$milestone->title}\": {$e->getMessage()}"
+                                    );
+                                }
+                            } elseif ($paymentAction === 'refund') {
+                                // Refund the employer
+                                $payment = Payment::where('milestone_id', $milestone->id)
+                                    ->where('type', Payment::TYPE_ESCROW_FUNDED)
+                                    ->where('status', Payment::STATUS_DISPUTED)
+                                    ->first();
+
+                                if ($payment) {
+                                    try {
+                                        PaymentService::approveRefund(
+                                            $payment,
+                                            $actor->id,
+                                            null,
+                                            'Dispute resolution: refund to employer'
+                                        );
+                                    } catch (\RuntimeException $e) {
+                                        AuditService::log(
+                                            \App\Models\AuditLog::ACTION_PAYMENT_REFUNDED,
+                                            \App\Models\AuditLog::MODULE_PAYMENTS,
+                                            'Payment', $payment->id,
+                                            ['error' => $e->getMessage()],
+                                            $actor->id,
+                                            "Failed to refund payment {$payment->reference}: {$e->getMessage()}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     NotificationService::disputeResolved(
                         $contract->freelancer_id,
                         $contract->title,
@@ -123,6 +185,7 @@ class ReportController extends BaseApiController
                 'target_id'       => $report->target_id,
                 'resolution'      => $request->input('resolution'),
                 'contract_action' => $contractAction,
+                'payment_action'  => $paymentAction,
             ]);
         });
 

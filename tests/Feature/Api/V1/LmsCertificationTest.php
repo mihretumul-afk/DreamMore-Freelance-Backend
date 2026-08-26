@@ -24,6 +24,11 @@ class LmsCertificationTest extends TestCase
 
         $this->freelancer = User::factory()->create(['role' => 'freelancer']);
         $this->admin = User::factory()->create(['role' => 'admin']);
+        $superAdminRole = \App\Models\Role::firstOrCreate(
+            ['slug' => \App\Models\Role::SUPER_ADMIN],
+            ['name' => 'Super Admin', 'is_system' => true, 'is_active' => true]
+        );
+        $this->admin->adminRoles()->attach($superAdminRole->id);
     }
 
     // ==========================================
