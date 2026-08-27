@@ -221,10 +221,6 @@ class PaymentService
         ?PaymentMethod $paymentMethod = null,
         int           $actorId = 0,
     ): Payment {
-        if ($milestone->isEscrowFunded()) {
-            throw new \RuntimeException('This milestone has already been funded.');
-        }
-
         if ((float) $milestone->amount <= 0) {
             throw new \RuntimeException('Milestone amount must be greater than zero.');
         }
@@ -237,6 +233,21 @@ class PaymentService
         return DB::transaction(function () use (
             $contract, $milestone, $paymentMethod, $fee, $net, $provider, $actorId
         ) {
+            // CRITICAL: Re-check inside transaction with row lock to prevent double-funding race condition
+            $lockedMilestone = \App\Models\Milestone::where('id', $milestone->id)->lockForUpdate()->first();
+            if ($lockedMilestone && $lockedMilestone->isEscrowFunded()) {
+                throw new \RuntimeException('This milestone has already been funded.');
+            }
+
+            // Check for duplicate payment record
+            $existingPayment = Payment::where('milestone_id', $milestone->id)
+                ->where('type', Payment::TYPE_ESCROW_FUNDED)
+                ->where('status', Payment::STATUS_COMPLETED)
+                ->exists();
+            if ($existingPayment) {
+                throw new \RuntimeException('A payment for this milestone already exists.');
+            }
+
             // 1. Create the payment record.
             $payment = Payment::create([
                 'payer_id'          => $contract->employer_id,
@@ -338,8 +349,8 @@ class PaymentService
             throw new \RuntimeException('Milestone escrow has not been funded.');
         }
 
-        if ($milestone->status !== 'approved') {
-            throw new \RuntimeException('Only approved milestones can be released.');
+        if (!in_array($milestone->status, ['approved', 'released'], true)) {
+            throw new \RuntimeException('Only approved or released milestones can be released. Current status: \'' . $milestone->status . '\'.');
         }
 
         $provider = self::resolveProvider();
@@ -350,6 +361,21 @@ class PaymentService
         return DB::transaction(function () use (
             $contract, $milestone, $fee, $net, $provider, $actorId
         ) {
+            // CRITICAL: Re-check with row lock to prevent double-release race condition
+            $lockedMilestone = \App\Models\Milestone::where('id', $milestone->id)->lockForUpdate()->first();
+            if ($lockedMilestone && $lockedMilestone->isPaid()) {
+                throw new \RuntimeException('This milestone has already been paid.');
+            }
+
+            // Check for duplicate release payment
+            $existingRelease = Payment::where('milestone_id', $milestone->id)
+                ->where('type', Payment::TYPE_MILESTONE_RELEASED)
+                ->where('status', Payment::STATUS_COMPLETED)
+                ->exists();
+            if ($existingRelease) {
+                throw new \RuntimeException('A release payment for this milestone already exists.');
+            }
+
             // 1. Create the release payment.
             $payment = Payment::create([
                 'payer_id'     => $contract->employer_id,
@@ -401,9 +427,9 @@ class PaymentService
                 'milestone_id' => $milestone->id,
             ]);
 
-            // 4. Mark the milestone as paid.
+            // 4. Mark the milestone as released → paid.
             $milestone->update([
-                'status'  => 'paid',
+                'status'  => Milestone::STATUS_PAID,
                 'paid_at' => now(),
             ]);
 
@@ -486,8 +512,8 @@ class PaymentService
             // If payment is disputed, mark milestone as such.
             if ($payment->milestone_id) {
                 \App\Models\Milestone::where('id', $payment->milestone_id)
-                    ->whereIn('status', ['pending', 'in_progress', 'revision_requested'])
-                    ->update(['status' => 'pending']); // hold in pending
+                    ->whereIn('status', ['awaiting_funding', 'funded', 'in_progress', 'revision_requested'])
+                    ->update(['status' => \App\Models\Milestone::STATUS_AWAITING_FUNDING]);
             }
 
             // Notify admins.
@@ -590,13 +616,13 @@ class PaymentService
                 'refund_status' => Payment::REFUND_STATUS_COMPLETED,
             ]);
 
-            // Reset milestone to pending so it can be re-funded if needed.
+            // Reset milestone to awaiting_funding so it can be re-funded if needed.
             if ($payment->milestone_id) {
                 \App\Models\Milestone::where('id', $payment->milestone_id)
                     ->update([
                         'escrow_funded_at' => null,
                         'payment_id'       => null,
-                        'status'           => 'pending',
+                        'status'           => \App\Models\Milestone::STATUS_AWAITING_FUNDING,
                     ]);
             }
 
@@ -821,6 +847,13 @@ class PaymentService
             ->whereIn('status', [Payment::STATUS_PENDING, Payment::STATUS_PROCESSING])
             ->sum('amount');
 
+        // Pending outgoing: debits in pending/processing state (reserved for pending withdrawals)
+        $pendingOut = Transaction::where('user_id', $userId)
+            ->where('direction', Transaction::DIRECTION_DEBIT)
+            ->where('type', 'withdrawal')
+            ->whereIn('status', [Payment::STATUS_PENDING, Payment::STATUS_PROCESSING])
+            ->sum('amount');
+
         // Freelancer: pending earnings = escrow funded but not yet released milestones.
         $pendingEscrow = \App\Models\Milestone::whereNotNull('escrow_funded_at')
             ->whereNull('paid_at')
@@ -851,13 +884,17 @@ class PaymentService
             ->where('status', Payment::STATUS_COMPLETED)
             ->sum('amount');
 
+        // Freelancer available earnings = money received - money withdrawn - pending withdrawal reservations
+        $availableEarnings = max(0.0, (float) $totalEarned - (float) $totalSpent - (float) $pendingOut);
+
         return [
             // Freelancer categories
             'pending_earnings'    => (float) $pendingEscrowNet,
-            'available_earnings'  => max(0.0, (float) $totalEarned - (float) $totalSpent - (float) $pendingEscrowNet),
+            'available_earnings'  => $availableEarnings,
             'total_earned'        => (float) $totalEarned,
             'withdrawn'           => (float) $withdrawn,
             'total_refunded'      => (float) $totalRefunded,
+            'pending_withdrawals' => (float) $pendingOut,
 
             // Employer categories
             'available_balance'   => max(0.0, (float) $totalEarned - (float) $totalSpent),
@@ -866,6 +903,7 @@ class PaymentService
 
             // Shared
             'pending_in'          => (float) $pendingIn,
+            'pending_out'         => (float) $pendingOut,
             'pending_escrow_net'  => (float) $pendingEscrowNet,
             'currency'            => 'ETB',
         ];

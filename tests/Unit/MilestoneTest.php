@@ -12,14 +12,14 @@ class MilestoneTest extends TestCase
     use RefreshDatabase;
     use ContractTestHelpers;
 
-    public function test_new_milestone_instance_defaults_to_pending(): void
+    public function test_new_milestone_instance_defaults_to_awaiting_funding(): void
     {
         $milestone = new Milestone();
 
-        $this->assertEquals('pending', $milestone->status);
+        $this->assertEquals('awaiting_funding', $milestone->status);
     }
 
-    public function test_created_milestone_defaults_to_pending_status(): void
+    public function test_created_milestone_defaults_to_awaiting_funding_status(): void
     {
         $data = $this->createContract();
 
@@ -30,12 +30,12 @@ class MilestoneTest extends TestCase
         ]);
 
         // The in-memory model carries the default so API resources serialize it.
-        $this->assertEquals('pending', $milestone->status);
+        $this->assertEquals('awaiting_funding', $milestone->status);
 
         // The persisted record stores the default explicitly.
         $this->assertDatabaseHas('milestones', [
             'id' => $milestone->id,
-            'status' => 'pending',
+            'status' => 'awaiting_funding',
         ]);
     }
 }

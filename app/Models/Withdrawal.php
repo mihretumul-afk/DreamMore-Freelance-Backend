@@ -24,6 +24,8 @@ class Withdrawal extends Model
         'processed_by',
         'processed_at',
         'completed_at',
+        'rejected_at',
+        'rejection_reason',
     ];
 
     protected function casts(): array
@@ -35,6 +37,7 @@ class Withdrawal extends Model
             'provider_response' => 'array',
             'processed_at'      => 'datetime',
             'completed_at'      => 'datetime',
+            'rejected_at'       => 'datetime',
         ];
     }
 
@@ -45,6 +48,7 @@ class Withdrawal extends Model
     public const STATUS_COMPLETED  = 'completed';
     public const STATUS_FAILED     = 'failed';
     public const STATUS_CANCELLED  = 'cancelled';
+    public const STATUS_REJECTED   = 'rejected';
 
     public const STATUSES = [
         self::STATUS_REQUESTED,
@@ -52,6 +56,7 @@ class Withdrawal extends Model
         self::STATUS_COMPLETED,
         self::STATUS_FAILED,
         self::STATUS_CANCELLED,
+        self::STATUS_REJECTED,
     ];
 
     // ── Boot ─────────────────────────────────────────────────────────

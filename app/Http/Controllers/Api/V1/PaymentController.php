@@ -276,6 +276,15 @@ class PaymentController extends BaseApiController
             );
         }
 
+        // Only allow funding of milestones in awaiting_funding status
+        if ($milestone->status !== Milestone::STATUS_AWAITING_FUNDING) {
+            return $this->sendError(
+                "This milestone cannot be funded. Current status: '{$milestone->status}'.",
+                [],
+                422
+            );
+        }
+
         $validated = $request->validate([
             'payment_method_id' => ['nullable', 'integer', 'exists:payment_methods,id'],
         ]);
@@ -302,9 +311,24 @@ class PaymentController extends BaseApiController
             return $this->sendError($e->getMessage(), [], 422);
         }
 
+        // Transition milestone status: awaiting_funding → funded
+        $milestone->refresh();
+        if ($milestone->isEscrowFunded() && $milestone->status === Milestone::STATUS_AWAITING_FUNDING) {
+            $milestone->update(['status' => Milestone::STATUS_FUNDED]);
+        }
+
+        // Notify the freelancer that the milestone has been funded
+        \App\Services\NotificationService::milestoneFunded(
+            $contract->freelancer_id,
+            $milestone->title,
+            $milestone->amount,
+            $contract->title,
+            $contract->id
+        );
+
         return $this->sendResponse(
             $payment->load('milestone:id,title,status,escrow_funded_at'),
-            'Milestone escrow funded successfully.'
+            'Milestone escrow funded successfully. The freelancer has been notified.'
         );
     }
 
@@ -356,6 +380,55 @@ class PaymentController extends BaseApiController
             $payment->load('milestone:id,title,status,paid_at'),
             'Milestone payment released to freelancer.'
         );
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // MILESTONE EARNINGS (freelancer view)
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * GET /payments/earnings/milestones
+     * Returns per-milestone earnings breakdown for the authenticated freelancer.
+     */
+    public function milestoneEarnings(Request $request): JsonResponse
+    {
+        $userId = $request->user()->id;
+
+        $milestones = \App\Models\Milestone::whereHas('contract', fn ($q) => $q->where('freelancer_id', $userId))
+            ->with(['contract:id,title,employer_id'])
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(function ($milestone) use ($userId) {
+                $fees = PaymentService::calculateFees((float) $milestone->amount);
+                $netAmount = $fees['net'];
+
+                // Check if payment has been released
+                $releasePayment = Payment::where('milestone_id', $milestone->id)
+                    ->where('type', Payment::TYPE_MILESTONE_RELEASED)
+                    ->where('status', Payment::STATUS_COMPLETED)
+                    ->first();
+
+                return [
+                    'id' => $milestone->id,
+                    'contract_id' => $milestone->contract_id,
+                    'contract_title' => $milestone->contract?->title,
+                    'title' => $milestone->title,
+                    'amount' => (float) $milestone->amount,
+                    'currency' => 'ETB',
+                    'status' => $milestone->status,
+                    'platform_fee' => $fees['platform_fee'],
+                    'processing_fee' => $fees['processing_fee'],
+                    'total_fee' => $fees['total_fee'],
+                    'net_amount' => $netAmount,
+                    'is_funded' => $milestone->isFunded(),
+                    'is_released' => $milestone->status === Milestone::STATUS_PAID || $milestone->status === Milestone::STATUS_RELEASED,
+                    'paid_at' => $milestone->paid_at?->toIso8601String(),
+                    'escrow_funded_at' => $milestone->escrow_funded_at?->toIso8601String(),
+                    'created_at' => $milestone->created_at?->toIso8601String(),
+                ];
+            });
+
+        return $this->sendResponse($milestones, 'Milestone earnings retrieved.');
     }
 
     // ════════════════════════════════════════════════════════════════════

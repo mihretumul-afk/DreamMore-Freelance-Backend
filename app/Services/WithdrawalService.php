@@ -73,8 +73,18 @@ class WithdrawalService
         $fee     = round($amount * $withdrawalFeeRate, 2);
         $net     = $amount - $fee;
 
-        return DB::transaction(function () use ($userId, $amount, $fee, $net, $paymentMethod) {
-            $withdrawal = Withdrawal::create([
+        $withdrawal = DB::transaction(function () use ($userId, $amount, $fee, $net, $paymentMethod) {
+            // CRITICAL: Re-check for pending withdrawals inside transaction with lock
+            $pendingExists = Withdrawal::where('user_id', $userId)
+                ->whereIn('status', [Withdrawal::STATUS_REQUESTED, Withdrawal::STATUS_PROCESSING])
+                ->lockForUpdate()
+                ->exists();
+
+            if ($pendingExists) {
+                throw new \RuntimeException('You already have a pending withdrawal request. Please wait for it to be processed.');
+            }
+
+            $w = Withdrawal::create([
                 'user_id'           => $userId,
                 'payment_method_id' => $paymentMethod?->id,
                 'amount'            => $amount,
@@ -95,22 +105,23 @@ class WithdrawalService
                 'fee'         => $fee,
                 'currency'    => 'ETB',
                 'status'      => Payment::STATUS_PENDING,
-                'description' => "Withdrawal request: {$withdrawal->reference}",
+                'description' => "Withdrawal request: {$w->reference}",
             ]);
 
             AuditService::log(
                 \App\Models\AuditLog::ACTION_PAYMENT_PROCESSED,
                 \App\Models\AuditLog::MODULE_PAYMENTS,
-                'Withdrawal', $withdrawal->id,
-                ['reference' => $withdrawal->reference, 'amount' => $amount, 'fee' => $fee],
+                'Withdrawal', $w->id,
+                ['reference' => $w->reference, 'amount' => $amount, 'fee' => $fee],
                 $userId,
-                "User #{$userId} requested withdrawal of ETB {$amount} ({$withdrawal->reference})"
+                "User #{$userId} requested withdrawal of ETB {$amount} ({$w->reference})"
             );
 
-            return $withdrawal;
+            return $w;
         });
 
-        // Send email notification
+        // Send notification (outside transaction to avoid rolling back on email failure)
+        $withdrawal->refresh();
         NotificationService::withdrawalRequested(
             $userId,
             $withdrawal->reference,
@@ -119,6 +130,16 @@ class WithdrawalService
             $net,
             $paymentMethod?->getDisplayLabel()
         );
+
+        // Notify finance admins about the withdrawal request
+        NotificationService::notifyAdmins(
+            'withdrawal_requested',
+            'Withdrawal Requested',
+            "User #{$userId} has requested a withdrawal of ETB " . number_format($amount, 2) . " (Reference: {$withdrawal->reference}).",
+            '/admin/withdrawals'
+        );
+
+        return $withdrawal->fresh();
     }
 
     /**
@@ -170,7 +191,7 @@ class WithdrawalService
         int        $adminId,
         ?string    $note = null,
     ): Withdrawal {
-        return DB::transaction(function () use ($withdrawal, $adminId, $note) {
+        $result = DB::transaction(function () use ($withdrawal, $adminId, $note) {
             $withdrawal->update([
                 'status'       => Withdrawal::STATUS_COMPLETED,
                 'completed_at' => now(),
@@ -196,15 +217,17 @@ class WithdrawalService
             return $withdrawal->fresh();
         });
 
-        // Send email notification
+        // Notify the freelancer
         NotificationService::withdrawalCompleted(
-            $withdrawal->user_id,
-            $withdrawal->reference,
-            $withdrawal->amount,
-            $withdrawal->fee,
-            $withdrawal->net_amount,
-            $withdrawal->paymentMethod?->getDisplayLabel()
+            $result->user_id,
+            $result->reference,
+            $result->amount,
+            $result->fee,
+            $result->net_amount,
+            $result->paymentMethod?->getDisplayLabel()
         );
+
+        return $result;
     }
 
     /**
@@ -239,14 +262,47 @@ class WithdrawalService
 
             return $withdrawal->fresh();
         });
+    }
 
-        // Send email notification
-        NotificationService::withdrawalFailed(
-            $withdrawal->user_id,
-            $withdrawal->reference,
-            $withdrawal->amount,
-            $reason
-        );
+    /**
+     * Reject a withdrawal (by admin/finance).
+     */
+    public static function rejectWithdrawal(
+        Withdrawal $withdrawal,
+        string     $reason,
+        int        $adminId,
+    ): Withdrawal {
+        if (!in_array($withdrawal->status, [Withdrawal::STATUS_REQUESTED, Withdrawal::STATUS_PROCESSING], true)) {
+            throw new \RuntimeException('This withdrawal cannot be rejected in its current state.');
+        }
+
+        return DB::transaction(function () use ($withdrawal, $reason, $adminId) {
+            $withdrawal->update([
+                'status'           => Withdrawal::STATUS_REJECTED,
+                'rejection_reason' => $reason,
+                'rejected_at'      => now(),
+                'processed_by'     => $adminId,
+                'admin_notes'      => "Rejected by admin: {$reason}",
+            ]);
+
+            // Reverse the debit transaction
+            Transaction::where('user_id', $withdrawal->user_id)
+                ->where('type', 'withdrawal')
+                ->where('status', Payment::STATUS_PENDING)
+                ->where('description', 'like', "%{$withdrawal->reference}%")
+                ->update(['status' => Payment::STATUS_CANCELLED]);
+
+            AuditService::log(
+                \App\Models\AuditLog::ACTION_PAYMENT_PROCESSED,
+                \App\Models\AuditLog::MODULE_PAYMENTS,
+                'Withdrawal', $withdrawal->id,
+                ['reference' => $withdrawal->reference, 'action' => 'rejected', 'reason' => $reason],
+                $adminId,
+                "Admin #{$adminId} rejected withdrawal {$withdrawal->reference}: {$reason}"
+            );
+
+            return $withdrawal->fresh();
+        });
     }
 
     /**

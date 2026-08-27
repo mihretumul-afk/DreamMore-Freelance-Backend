@@ -594,6 +594,54 @@ class NotificationService
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // MILESTONE LIFECYCLE notifications
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Notify freelancer that a new milestone has been created.
+     */
+    public static function milestoneCreated(int $freelancerId, string $milestoneTitle, float $amount, string $contractTitle, int $contractId): Notification
+    {
+        $formatted = 'ETB ' . number_format($amount, 2);
+        return self::create(
+            $freelancerId,
+            'milestone_created',
+            'New Milestone Created',
+            "A new milestone \"{$milestoneTitle}\" ({$formatted}) has been created in contract \"{$contractTitle}\".",
+            "/freelancer/contracts/{$contractId}"
+        );
+    }
+
+    /**
+     * Notify freelancer that a milestone has been funded and they can start work.
+     */
+    public static function milestoneFunded(int $freelancerId, string $milestoneTitle, float $amount, string $contractTitle, int $contractId): Notification
+    {
+        $formatted = 'ETB ' . number_format($amount, 2);
+        return self::create(
+            $freelancerId,
+            'milestone_funded',
+            'Milestone Funded — Start Working!',
+            "Milestone \"{$milestoneTitle}\" ({$formatted}) in contract \"{$contractTitle}\" has been funded. You can now start working!",
+            "/freelancer/contracts/{$contractId}"
+        );
+    }
+
+    /**
+     * Notify employer that the freelancer has started working on a milestone.
+     */
+    public static function milestoneStarted(int $employerId, string $milestoneTitle, string $contractTitle, int $contractId): Notification
+    {
+        return self::create(
+            $employerId,
+            'milestone_started',
+            'Work Started',
+            "The freelancer has started working on milestone \"{$milestoneTitle}\" in contract \"{$contractTitle}\".",
+            "/employer/contracts/{$contractId}"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // EMAIL DISPATCH
     // ═══════════════════════════════════════════════════════════════════
 

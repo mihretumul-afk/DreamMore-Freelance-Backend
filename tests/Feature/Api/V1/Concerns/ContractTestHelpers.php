@@ -94,16 +94,26 @@ trait ContractTestHelpers
 
     /**
      * Create a milestone on the given contract.
+     * Automatically sets escrow_funded_at for statuses that require it.
      */
     protected function createMilestone(Contract $contract, array $overrides = []): Milestone
     {
-        return Milestone::create(array_merge([
+        $data = array_merge([
             'contract_id' => $contract->id,
             'title' => 'Phase 1: Database Design',
             'description' => 'Design and implement the database schema.',
             'amount' => 15000,
             'due_date' => now()->addDays(14),
-        ], $overrides));
+        ], $overrides);
+
+        // Automatically set escrow_funded_at for statuses that require funding
+        $fundedStatuses = ['funded', 'in_progress', 'submitted', 'revision_requested', 'approved', 'released', 'paid'];
+        $status = $data['status'] ?? 'awaiting_funding';
+        if (in_array($status, $fundedStatuses, true) && !isset($data['escrow_funded_at'])) {
+            $data['escrow_funded_at'] = now();
+        }
+
+        return Milestone::create($data);
     }
 
     /**

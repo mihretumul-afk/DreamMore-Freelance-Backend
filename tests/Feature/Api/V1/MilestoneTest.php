@@ -29,7 +29,7 @@ class MilestoneTest extends TestCase
             ->assertJsonPath('data.title', 'Phase 1: UI Design')
             ->assertJsonPath('data.amount', 15000)
             ->assertJsonPath('data.currency', 'ETB')
-            ->assertJsonPath('data.status', 'pending');
+            ->assertJsonPath('data.status', 'awaiting_funding');
 
         $this->assertDatabaseHas('milestones', [
             'contract_id' => $data['contract']->id,
@@ -123,10 +123,26 @@ class MilestoneTest extends TestCase
             ->assertStatus(404);
     }
 
-    public function test_freelancer_can_submit_milestone(): void
+    public function test_freelancer_cannot_submit_unfunded_milestone(): void
     {
         $data = $this->createContract();
+        // Default status is awaiting_funding — freelancer should NOT be able to submit
         $milestone = $this->createMilestone($data['contract']);
+
+        $this->actingAsSanctum($data['freelancer'])
+            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/submit')
+            ->assertStatus(422);
+    }
+
+    public function test_freelancer_can_submit_funded_milestone(): void
+    {
+        $data = $this->createContract();
+        // Milestone must be in_progress (funded + started) to submit
+        $milestone = $this->createMilestone($data['contract'], [
+            'status' => 'in_progress',
+            'escrow_funded_at' => now(),
+            'started_at' => now(),
+        ]);
 
         $response = $this->actingAsSanctum($data['freelancer'])
             ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/submit');
@@ -141,10 +157,43 @@ class MilestoneTest extends TestCase
         ]);
     }
 
+    public function test_freelancer_can_start_work_on_funded_milestone(): void
+    {
+        $data = $this->createContract();
+        $milestone = $this->createMilestone($data['contract'], [
+            'status' => 'funded',
+            'escrow_funded_at' => now(),
+        ]);
+
+        $response = $this->actingAsSanctum($data['freelancer'])
+            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/start');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.status', 'in_progress');
+
+        $this->assertDatabaseHas('milestones', [
+            'id' => $milestone->id,
+            'status' => 'in_progress',
+        ]);
+    }
+
+    public function test_freelancer_cannot_start_work_on_unfunded_milestone(): void
+    {
+        $data = $this->createContract();
+        $milestone = $this->createMilestone($data['contract']); // awaiting_funding
+
+        $this->actingAsSanctum($data['freelancer'])
+            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/start')
+            ->assertStatus(422);
+    }
+
     public function test_employer_cannot_submit_milestone(): void
     {
         $data = $this->createContract();
-        $milestone = $this->createMilestone($data['contract']);
+        $milestone = $this->createMilestone($data['contract'], [
+            'status' => 'in_progress',
+            'escrow_funded_at' => now(),
+        ]);
 
         $this->actingAsSanctum($data['employer'])
             ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/submit')
@@ -155,7 +204,10 @@ class MilestoneTest extends TestCase
     {
         $data = $this->createContract();
         $otherData = $this->createContract();
-        $milestone = $this->createMilestone($otherData['contract']);
+        $milestone = $this->createMilestone($otherData['contract'], [
+            'status' => 'in_progress',
+            'escrow_funded_at' => now(),
+        ]);
 
         $this->actingAsSanctum($data['freelancer'])
             ->postJson('/api/v1/contracts/' . $otherData['contract']->id . '/milestones/' . $milestone->id . '/submit')
@@ -186,7 +238,7 @@ class MilestoneTest extends TestCase
     public function test_employer_cannot_approve_unsubmitted_milestone(): void
     {
         $data = $this->createContract();
-        $milestone = $this->createMilestone($data['contract']); // pending
+        $milestone = $this->createMilestone($data['contract']); // awaiting_funding
 
         $this->actingAsSanctum($data['employer'])
             ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/approve')
@@ -194,7 +246,7 @@ class MilestoneTest extends TestCase
 
         $this->assertDatabaseHas('milestones', [
             'id' => $milestone->id,
-            'status' => 'pending',
+            'status' => 'awaiting_funding',
         ]);
     }
 
@@ -230,10 +282,10 @@ class MilestoneTest extends TestCase
     {
         $data = $this->createContract();
 
-        // Revision on a pending milestone is invalid.
-        $pending = $this->createMilestone($data['contract']);
+        // Revision on an awaiting_funding milestone is invalid.
+        $awaiting = $this->createMilestone($data['contract']);
         $this->actingAsSanctum($data['employer'])
-            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $pending->id . '/revision')
+            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $awaiting->id . '/revision')
             ->assertStatus(422);
 
         // Submitting an approved milestone is invalid.
@@ -246,7 +298,7 @@ class MilestoneTest extends TestCase
             ->assertStatus(422);
     }
 
-    public function test_employer_can_update_pending_milestone(): void
+    public function test_employer_can_update_awaiting_funding_milestone(): void
     {
         $data = $this->createContract();
         $milestone = $this->createMilestone($data['contract']);
@@ -289,7 +341,7 @@ class MilestoneTest extends TestCase
             ->assertStatus(403);
     }
 
-    public function test_employer_can_delete_pending_milestone(): void
+    public function test_employer_can_delete_awaiting_funding_milestone(): void
     {
         $data = $this->createContract();
         $milestone = $this->createMilestone($data['contract']);
@@ -326,7 +378,10 @@ class MilestoneTest extends TestCase
     public function test_cannot_submit_milestone_on_cancelled_contract(): void
     {
         $data = $this->createContract(['status' => 'cancelled']);
-        $milestone = $this->createMilestone($data['contract']);
+        $milestone = $this->createMilestone($data['contract'], [
+            'status' => 'in_progress',
+            'escrow_funded_at' => now(),
+        ]);
 
         $this->actingAsSanctum($data['freelancer'])
             ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/submit')
@@ -361,15 +416,40 @@ class MilestoneTest extends TestCase
     public function test_full_milestone_workflow_end_to_end(): void
     {
         $data = $this->createContract();
-        $milestone = $this->createMilestone($data['contract']);
 
-        // Freelancer submits.
+        // 1. Employer creates milestone → awaiting_funding
+        $milestone = $this->createMilestone($data['contract']);
+        $this->assertDatabaseHas('milestones', ['id' => $milestone->id, 'status' => 'awaiting_funding']);
+
+        // 2. Freelancer cannot start work on unfunded milestone
+        $this->actingAsSanctum($data['freelancer'])
+            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/start')
+            ->assertStatus(422);
+
+        // 3. Freelancer cannot submit on unfunded milestone
+        $this->actingAsSanctum($data['freelancer'])
+            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/submit')
+            ->assertStatus(422);
+
+        // 4. Simulate funding (mark as funded with escrow)
+        $milestone->update([
+            'status' => 'funded',
+            'escrow_funded_at' => now(),
+        ]);
+
+        // 5. Freelancer starts work → in_progress
+        $this->actingAsSanctum($data['freelancer'])
+            ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/start')
+            ->assertStatus(200)
+            ->assertJsonPath('data.status', 'in_progress');
+
+        // 6. Freelancer submits → submitted
         $this->actingAsSanctum($data['freelancer'])
             ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/submit')
             ->assertStatus(200)
             ->assertJsonPath('data.status', 'submitted');
 
-        // Employer requests revision -> status becomes revision_requested.
+        // 7. Employer requests revision → revision_requested
         $this->actingAsSanctum($data['employer'])
             ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/revision', [
                 'revision_note' => 'Please update responsive styles.',
@@ -377,13 +457,13 @@ class MilestoneTest extends TestCase
             ->assertStatus(200)
             ->assertJsonPath('data.status', 'revision_requested');
 
-        // Freelancer submits again.
+        // 8. Freelancer resubmits → submitted
         $this->actingAsSanctum($data['freelancer'])
             ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/submit')
             ->assertStatus(200)
             ->assertJsonPath('data.status', 'submitted');
 
-        // Employer approves.
+        // 9. Employer approves → approved
         $this->actingAsSanctum($data['employer'])
             ->postJson('/api/v1/contracts/' . $data['contract']->id . '/milestones/' . $milestone->id . '/approve')
             ->assertStatus(200)

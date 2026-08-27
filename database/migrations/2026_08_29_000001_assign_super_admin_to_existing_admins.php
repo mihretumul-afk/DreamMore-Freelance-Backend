@@ -44,8 +44,6 @@ return new class extends Migration
                 'role_id'     => $superAdminRole->id,
                 'assigned_by' => null,
                 'assigned_at' => now(),
-                'created_at'  => now(),
-                'updated_at'  => now(),
             ]);
         }
     }

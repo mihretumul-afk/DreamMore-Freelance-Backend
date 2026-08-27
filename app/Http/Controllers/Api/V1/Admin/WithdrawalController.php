@@ -134,6 +134,33 @@ class WithdrawalController extends BaseApiController
     }
 
     /**
+     * PUT /admin/withdrawals/{withdrawal}/reject
+     * Reject a withdrawal request.
+     */
+    public function reject(Request $request, Withdrawal $withdrawal): JsonResponse
+    {
+        if (!$request->user()->hasPermission('withdrawals.manage')) {
+            return $this->sendForbidden('You do not have permission to reject withdrawals.');
+        }
+
+        $validated = $request->validate([
+            'reason' => ['required', 'string', 'min:5', 'max:500'],
+        ]);
+
+        try {
+            $rejected = WithdrawalService::rejectWithdrawal(
+                $withdrawal,
+                $validated['reason'],
+                $request->user()->id,
+            );
+        } catch (\RuntimeException $e) {
+            return $this->sendError($e->getMessage(), [], 422);
+        }
+
+        return $this->sendResponse($rejected, 'Withdrawal rejected.');
+    }
+
+    /**
      * PUT /admin/withdrawals/{withdrawal}/fail
      * Mark a withdrawal as failed.
      */

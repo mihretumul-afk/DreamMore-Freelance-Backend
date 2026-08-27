@@ -101,12 +101,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/contracts/{contract}/milestones', [MilestoneController::class, 'store']);
     Route::get('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'show']);
     Route::put('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'update']);
+    Route::post('/contracts/{contract}/milestones/{milestone}/start', [MilestoneController::class, 'startWork']);
     Route::post('/contracts/{contract}/milestones/{milestone}/submit', [MilestoneController::class, 'submit']);
     Route::post('/contracts/{contract}/milestones/{milestone}/approve', [MilestoneController::class, 'approve']);
     Route::post('/contracts/{contract}/milestones/{milestone}/revision', [MilestoneController::class, 'revision']);
     Route::delete('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'destroy']);
     Route::get('/contracts/{contract}/milestones/{milestone}/submissions', [MilestoneController::class, 'submissions']);
     Route::get('/contracts/{contract}/milestones/{milestone}/submissions/{submission}/files/{file}/download', [MilestoneController::class, 'downloadFile']);
+    Route::get('/contracts/{contract}/milestones/{milestone}/submissions/{submission}/files/{file}/preview', [MilestoneController::class, 'previewFile']);
+
+    // Milestone attachments (employer-created)
+    Route::get('/contracts/{contract}/milestones/{milestone}/attachments/{attachment}/download', [MilestoneController::class, 'downloadAttachment']);
+    Route::get('/contracts/{contract}/milestones/{milestone}/attachments/{attachment}/preview', [MilestoneController::class, 'previewAttachment']);
+    Route::delete('/contracts/{contract}/milestones/{milestone}/attachments/{attachment}', [MilestoneController::class, 'deleteAttachment']);
 });
 
 // Stage 13 — Job Posting & Management
@@ -367,6 +374,8 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
         ->middleware('permission:withdrawals.manage');
     Route::put('/withdrawals/{withdrawal}/complete', [AdminWithdrawalController::class, 'complete'])
         ->middleware('permission:withdrawals.manage');
+    Route::put('/withdrawals/{withdrawal}/reject',   [AdminWithdrawalController::class, 'reject'])
+        ->middleware('permission:withdrawals.manage');
     Route::put('/withdrawals/{withdrawal}/fail',     [AdminWithdrawalController::class, 'fail'])
         ->middleware('permission:withdrawals.manage');
 });
@@ -450,6 +459,9 @@ Route::post('/payments/webhook/chapa', [WebhookController::class, 'chapaWebhook'
 Route::middleware('auth:sanctum')->prefix('payments')->group(function () {
     // Balance summary (works for both freelancers and employers)
     Route::get('/balance', [PaymentController::class, 'balance']);
+
+    // Milestone earnings breakdown (freelancer view)
+    Route::get('/earnings/milestones', [PaymentController::class, 'milestoneEarnings']);
 
     // Payment methods
     Route::get('/methods',                     [PaymentController::class, 'listMethods']);
