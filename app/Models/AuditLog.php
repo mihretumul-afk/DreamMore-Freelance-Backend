@@ -78,6 +78,7 @@ class AuditLog extends Model
     public const ACTION_VERIFICATION_REJECTED = 'verification.rejected';
     public const ACTION_CREDENTIAL_APPROVED   = 'credential.approved';
     public const ACTION_CREDENTIAL_REJECTED   = 'credential.rejected';
+    public const ACTION_CREDENTIAL_RESUBMISSION_REQUESTED = 'credential.resubmission_requested';
 
     // ── Action constants — Disputes ───────────────────────────────────────
 

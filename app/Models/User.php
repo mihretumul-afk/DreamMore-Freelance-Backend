@@ -124,6 +124,11 @@ class User extends Authenticatable
         return $this->role === 'admin';
     }
 
+    public function wallet(): HasOne
+    {
+        return $this->hasOne(Wallet::class);
+    }
+
     public function freelancerProfile(): HasOne
     {
         return $this->hasOne(FreelancerProfile::class);

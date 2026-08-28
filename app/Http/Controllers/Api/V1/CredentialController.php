@@ -6,6 +6,7 @@ use App\Models\Credential;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class CredentialController extends BaseApiController
@@ -66,9 +67,8 @@ class CredentialController extends BaseApiController
     /**
      * Store a new credential.
      *
-     * External credentials go through admin review.
-     * Dream More certificates submitted by freelancers are stored as pending
-     * and must be verified through the trusted LMS webhook — NOT auto-approved.
+     * Supports DreamMore Certificates (Certificate ID required) and
+     * External Certificates (Title & Document required).
      */
     public function store(Request $request): JsonResponse
     {
@@ -78,16 +78,40 @@ class CredentialController extends BaseApiController
             return $this->sendForbidden('Only freelancers can create credentials.');
         }
 
-        $validated = $request->validate([
+        $type = $request->input('type', 'external_certificate');
+        $isDreamMore = $type === 'dream_more_certificate';
+
+        $rules = [
             'title' => 'required|string|max:255',
             'type' => 'required|in:dream_more_certificate,external_certificate,training_certificate,professional_qualification,other',
-            'issuing_organization' => 'nullable|string|max:255',
-            'certificate_identifier' => 'nullable|string|max:255',
+            'issuing_organization' => $isDreamMore ? 'nullable|string|max:255' : 'required|string|max:255',
+            'certificate_identifier' => $isDreamMore ? 'required|string|max:255' : 'nullable|string|max:255',
             'description' => 'nullable|string|max:2000',
             'issue_date' => 'nullable|date',
             'expiry_date' => 'nullable|date|after_or_equal:issue_date',
             'skill_id' => 'nullable|integer|exists:skills,id',
-            'document' => [
+        ];
+
+        // Document required for external certificate; optional for DreamMore certificate
+        if ($isDreamMore) {
+            $rules['document'] = [
+                'nullable',
+                'file',
+                'max:' . self::MAX_FILE_SIZE_KB,
+                function ($attribute, $value, $fail) {
+                    if ($value && !in_array($value->getMimeType(), self::ALLOWED_MIME_TYPES, true)) {
+                        $fail('The document must be a JPG, PNG, WEBP, or PDF file.');
+                    }
+                    if ($value) {
+                        $extension = strtolower($value->getClientOriginalExtension());
+                        if (!in_array($extension, ['jpg', 'jpeg', 'png', 'webp', 'pdf'], true)) {
+                            $fail('The document file extension must be jpg, jpeg, png, webp, or pdf.');
+                        }
+                    }
+                },
+            ];
+        } else {
+            $rules['document'] = [
                 'required',
                 'file',
                 'max:' . self::MAX_FILE_SIZE_KB,
@@ -100,31 +124,54 @@ class CredentialController extends BaseApiController
                         $fail('The document file extension must be jpg, jpeg, png, webp, or pdf.');
                     }
                 },
-            ],
-        ]);
+            ];
+        }
 
-        $file = $request->file('document');
-        $fileName = $user->id . '_' . time() . '_' . bin2hex(random_bytes(8)) . '.' . $file->getClientOriginalExtension();
-        $safeName = 'credentials/' . $fileName;
-        $file->storeAs('credentials', $fileName, 'private');
+        $validated = $request->validate($rules);
 
-        // Determine test requirements and source
-        $isExternal = in_array($validated['type'], ['external_certificate', 'training_certificate', 'professional_qualification', 'other'], true);
+        // Handle file storage
+        $safeName = null;
+        $originalName = null;
 
-        // External credentials require admin review and may need a skill test
+        if ($request->hasFile('document')) {
+            $file = $request->file('document');
+            $fileName = $user->id . '_' . time() . '_' . bin2hex(random_bytes(8)) . '.' . $file->getClientOriginalExtension();
+            $safeName = 'credentials/' . $fileName;
+            $file->storeAs('credentials', $fileName, 'private');
+            $originalName = $file->getClientOriginalName();
+        } else {
+            $safeName = 'dream_more_certificates/id_' . Str::slug($validated['certificate_identifier'] ?? 'DM-' . time());
+            $originalName = 'DreamMore_Certificate_' . ($validated['certificate_identifier'] ?? 'ID') . '.pdf';
+        }
+
+        // DreamMore certificate validation against existing LMS records
+        $verificationSource = $isDreamMore ? 'dream_more_lms' : 'external_manual';
+        $status = 'pending';
+        $autoVerified = false;
+
+        if ($isDreamMore) {
+            // Check if matching LMS certificate already exists in database
+            $lmsMatch = Credential::where('lms_certificate_id', $validated['certificate_identifier'])
+                ->orWhere('certificate_identifier', $validated['certificate_identifier'])
+                ->first();
+
+            if ($lmsMatch && $lmsMatch->auto_verified) {
+                $status = 'approved';
+                $autoVerified = true;
+            }
+        }
+
+        // External credentials test requirements check
         $testRequired = false;
         $testStatus = 'not_required';
 
-        if ($isExternal) {
-            // Check if a skill test exists for this credential's associated skill
-            if (!empty($validated['skill_id'])) {
-                $testExists = \App\Models\SkillTest::where('skill_id', $validated['skill_id'])
-                    ->where('is_active', true)
-                    ->exists();
-                if ($testExists) {
-                    $testRequired = true;
-                    $testStatus = 'pending';
-                }
+        if (!$isDreamMore && !empty($validated['skill_id'])) {
+            $testExists = \App\Models\SkillTest::where('skill_id', $validated['skill_id'])
+                ->where('is_active', true)
+                ->exists();
+            if ($testExists) {
+                $testRequired = true;
+                $testStatus = 'pending';
             }
         }
 
@@ -132,20 +179,21 @@ class CredentialController extends BaseApiController
             'user_id' => $user->id,
             'title' => $validated['title'],
             'type' => $validated['type'],
-            'issuing_organization' => $validated['issuing_organization'] ?? null,
+            'issuing_organization' => $isDreamMore ? 'DreamMore' : ($validated['issuing_organization'] ?? null),
             'certificate_identifier' => $validated['certificate_identifier'] ?? null,
             'description' => $validated['description'] ?? null,
             'issue_date' => $validated['issue_date'] ?? null,
             'expiry_date' => $validated['expiry_date'] ?? null,
             'file_path' => $safeName,
-            'file_original_name' => $file->getClientOriginalName(),
-            'status' => 'pending',
-            'verification_source' => $isExternal ? 'external_manual' : null,
+            'file_original_name' => $originalName,
+            'status' => $status,
+            'verification_source' => $verificationSource,
+            'lms_certificate_id' => $isDreamMore ? ($validated['certificate_identifier'] ?? null) : null,
+            'auto_verified' => $autoVerified,
             'test_required' => $testRequired,
             'test_status' => $testStatus,
         ]);
 
-        // Notify freelancer if test is required
         if ($testRequired) {
             \App\Models\Notification::create([
                 'user_id' => $user->id,
@@ -156,7 +204,7 @@ class CredentialController extends BaseApiController
             ]);
         }
 
-        return $this->sendResponse($credential, 'Credential submitted successfully.', 201);
+        return $this->sendResponse($credential, 'Credential submitted successfully for verification.', 201);
     }
 
     /**
@@ -174,7 +222,7 @@ class CredentialController extends BaseApiController
     }
 
     /**
-     * Update a credential (owner only, must be pending).
+     * Update a credential (owner only, must be pending, rejected, or resubmission_required).
      */
     public function update(Request $request, Credential $credential): JsonResponse
     {
@@ -184,11 +232,14 @@ class CredentialController extends BaseApiController
             return $this->sendForbidden('You do not have access to this credential.');
         }
 
-        if ($credential->status !== 'pending') {
-            return $this->sendError('Only pending credentials can be updated.', [], 422);
+        if (!in_array($credential->status, ['pending', 'rejected', 'resubmission_required'], true)) {
+            return $this->sendError('Only credentials in pending, rejected, or resubmission state can be updated.', [], 422);
         }
 
-        $validated = $request->validate([
+        $type = $request->input('type', $credential->type);
+        $isDreamMore = $type === 'dream_more_certificate';
+
+        $rules = [
             'title' => 'sometimes|string|max:255',
             'type' => 'sometimes|in:dream_more_certificate,external_certificate,training_certificate,professional_qualification,other',
             'issuing_organization' => 'nullable|string|max:255',
@@ -201,22 +252,29 @@ class CredentialController extends BaseApiController
                 'file',
                 'max:' . self::MAX_FILE_SIZE_KB,
                 function ($attribute, $value, $fail) {
-                    if (!in_array($value->getMimeType(), self::ALLOWED_MIME_TYPES, true)) {
+                    if ($value && !in_array($value->getMimeType(), self::ALLOWED_MIME_TYPES, true)) {
                         $fail('The document must be a JPG, PNG, WEBP, or PDF file.');
                     }
-                    $extension = strtolower($value->getClientOriginalExtension());
-                    if (!in_array($extension, ['jpg', 'jpeg', 'png', 'webp', 'pdf'], true)) {
-                        $fail('The document file extension must be jpg, jpeg, png, webp, or pdf.');
+                    if ($value) {
+                        $extension = strtolower($value->getClientOriginalExtension());
+                        if (!in_array($extension, ['jpg', 'jpeg', 'png', 'webp', 'pdf'], true)) {
+                            $fail('The document file extension must be jpg, jpeg, png, webp, or pdf.');
+                        }
                     }
                 },
             ],
-        ]);
+        ];
 
+        $validated = $request->validate($rules);
         $updateData = array_filter($validated, fn ($v) => $v !== null && $v !== '' && $v !== 'document');
+
+        if ($isDreamMore) {
+            $updateData['issuing_organization'] = 'DreamMore';
+            $updateData['lms_certificate_id'] = $validated['certificate_identifier'] ?? $credential->certificate_identifier;
+        }
 
         // Handle optional new document upload
         if ($request->hasFile('document')) {
-            // Remove old file
             if ($credential->file_path && Storage::disk('private')->exists($credential->file_path)) {
                 Storage::disk('private')->delete($credential->file_path);
             }
@@ -230,13 +288,19 @@ class CredentialController extends BaseApiController
             $updateData['file_original_name'] = $file->getClientOriginalName();
         }
 
+        // When resubmitting a rejected or resubmission_required credential, reset to pending
+        $updateData['status'] = 'pending';
+        $updateData['rejection_reason'] = null;
+        $updateData['reviewed_by'] = null;
+        $updateData['reviewed_at'] = null;
+
         $credential->update($updateData);
 
-        return $this->sendResponse($credential->fresh(), 'Credential updated successfully.');
+        return $this->sendResponse($credential->fresh(), 'Credential resubmitted for verification successfully.');
     }
 
     /**
-     * Delete a credential (owner only, must be pending).
+     * Delete a credential (owner only, must be pending, rejected, or resubmission_required).
      */
     public function destroy(Request $request, Credential $credential): JsonResponse
     {
@@ -246,8 +310,8 @@ class CredentialController extends BaseApiController
             return $this->sendForbidden('You do not have access to this credential.');
         }
 
-        if ($credential->status !== 'pending') {
-            return $this->sendError('Only pending credentials can be deleted.', [], 422);
+        if (!in_array($credential->status, ['pending', 'rejected', 'resubmission_required'], true)) {
+            return $this->sendError('Only pending, rejected, or resubmission credentials can be deleted.', [], 422);
         }
 
         // Remove file

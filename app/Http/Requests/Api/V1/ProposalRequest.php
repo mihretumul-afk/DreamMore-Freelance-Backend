@@ -42,6 +42,11 @@ class ProposalRequest extends FormRequest
             'bid_amount' => $bidRules,
             'currency' => ['sometimes', 'string', 'size:3'],
             'estimated_duration' => [$required, 'string', 'max:255'],
+            'proposed_milestones' => ['nullable', 'array'],
+            'proposed_milestones.*.title' => ['required_with:proposed_milestones', 'string', 'max:255'],
+            'proposed_milestones.*.amount' => ['required_with:proposed_milestones', 'numeric', 'min:1'],
+            'proposed_milestones.*.dueDate' => ['nullable', 'date'],
+            'proposed_milestones.*.description' => ['nullable', 'string', 'max:1000'],
             'portfolio_item_ids' => ['nullable', 'array'],
             'portfolio_item_ids.*' => ['integer', 'exists:portfolio_items,id'],
         ];

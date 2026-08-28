@@ -18,6 +18,9 @@ use App\Http\Controllers\Api\V1\PaymentController;
 use App\Http\Controllers\Api\V1\WebhookController;
 use App\Http\Controllers\Api\V1\WithdrawalController;
 use App\Http\Controllers\Api\V1\Admin\WithdrawalController as AdminWithdrawalController;
+use App\Http\Controllers\Api\V1\WalletController;
+use App\Http\Controllers\Api\V1\DisputeController;
+use App\Http\Controllers\Api\V1\Admin\RevenueReportController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -90,6 +93,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Contracts
     Route::get('/contracts', [ContractController::class, 'index']);
     Route::get('/contracts/{contract}', [ContractController::class, 'show']);
+    Route::get('/contracts/{contract}/activities', [ContractController::class, 'activities']);
     Route::post('/contracts/{contract}/pause', [ContractController::class, 'pause']);
     Route::post('/contracts/{contract}/resume', [ContractController::class, 'resume']);
     Route::post('/contracts/{contract}/complete', [ContractController::class, 'complete']);
@@ -101,6 +105,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/contracts/{contract}/milestones', [MilestoneController::class, 'store']);
     Route::get('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'show']);
     Route::put('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'update']);
+    Route::post('/contracts/{contract}/milestones/{milestone}/fund', [MilestoneController::class, 'fund']);
     Route::post('/contracts/{contract}/milestones/{milestone}/start', [MilestoneController::class, 'startWork']);
     Route::post('/contracts/{contract}/milestones/{milestone}/submit', [MilestoneController::class, 'submit']);
     Route::post('/contracts/{contract}/milestones/{milestone}/approve', [MilestoneController::class, 'approve']);
@@ -109,6 +114,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/contracts/{contract}/milestones/{milestone}/submissions', [MilestoneController::class, 'submissions']);
     Route::get('/contracts/{contract}/milestones/{milestone}/submissions/{submission}/files/{file}/download', [MilestoneController::class, 'downloadFile']);
     Route::get('/contracts/{contract}/milestones/{milestone}/submissions/{submission}/files/{file}/preview', [MilestoneController::class, 'previewFile']);
+
+    // Wallet routes
+    Route::get('/wallet', [WalletController::class, 'show']);
+    Route::get('/wallet/balance', [WalletController::class, 'show']);
+    Route::post('/wallet/withdraw', [WalletController::class, 'withdraw']);
+    Route::get('/wallet/transactions', [WalletController::class, 'transactions']);
+
+    // Dispute routes
+    Route::post('/disputes', [DisputeController::class, 'store']);
 
     // Milestone attachments (employer-created)
     Route::get('/contracts/{contract}/milestones/{milestone}/attachments/{attachment}/download', [MilestoneController::class, 'downloadAttachment']);
@@ -236,6 +250,8 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
         ->middleware('permission:users.verify');
     Route::put('/credentials/{credential}/reject', [VerificationController::class, 'rejectCredential'])
         ->middleware('permission:users.verify');
+    Route::put('/credentials/{credential}/resubmit', [VerificationController::class, 'requestResubmissionCredential'])
+        ->middleware('permission:users.verify');
 
     // ── Job moderation ───────────────────────────────────────────────────
     Route::get('/jobs', [AdminJobController::class, 'index'])
@@ -282,6 +298,14 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
         ->middleware('permission:settings.view');
     Route::put('/settings', [SettingController::class, 'update'])
         ->middleware('permission:settings.edit');
+    Route::put('/platform-settings/fee', [PlatformSettingsController::class, 'updateFee']);
+
+    // ── Escrow Disputes ──────────────────────────────────────────────────
+    Route::get('/disputes', [DisputeController::class, 'index']);
+    Route::put('/disputes/{dispute}/resolve', [DisputeController::class, 'resolve']);
+
+    // ── Revenue Reports ──────────────────────────────────────────────────
+    Route::get('/reports/revenue-summary', [RevenueReportController::class, 'summary']);
 
     // ── Freelancer approval ──────────────────────────────────────────────
     Route::get('/freelancers', [FreelancerApprovalController::class, 'index'])
@@ -348,6 +372,10 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
         ->middleware('permission:payments.verify');
     Route::post('/payments/{payment}/refund',    [AdminPaymentController::class, 'refund'])
         ->middleware('permission:payments.refund');
+
+    // ── Milestone management ─────────────────────────────────────────────
+    Route::get('/milestones',                    [MilestoneController::class, 'adminIndex'])
+        ->middleware('permission:milestones.view');
 
     // ── Refund request management ────────────────────────────────────────
     Route::get('/refund-requests',               [AdminPaymentController::class, 'refundRequests'])
@@ -493,9 +521,9 @@ Route::middleware('auth:sanctum')->prefix('payments')->group(function () {
 // Milestone escrow & release (nested under contracts for REST consistency)
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/contracts/{contract}/milestones/{milestone}/fund',
-        [PaymentController::class, 'fundMilestone']);
+        [MilestoneController::class, 'fund']);
     Route::post('/contracts/{contract}/milestones/{milestone}/release',
-        [PaymentController::class, 'releaseMilestone']);
+        [MilestoneController::class, 'approve']);
     Route::post('/contracts/{contract}/milestones/{milestone}/refund-request',
         [PaymentController::class, 'requestMilestoneRefund']);
 });

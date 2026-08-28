@@ -435,6 +435,22 @@ class ProposalController extends BaseApiController
                 $job->update(['status' => 'in_progress']);
             }
 
+            // Populate contract milestones if proposal has proposed_milestones
+            if (!empty($proposal->proposed_milestones) && is_array($proposal->proposed_milestones)) {
+                foreach ($proposal->proposed_milestones as $m) {
+                    if (!empty($m['title']) && !empty($m['amount'])) {
+                        \App\Models\Milestone::create([
+                            'contract_id' => $createdContract->id,
+                            'title' => $m['title'],
+                            'amount' => $m['amount'],
+                            'due_date' => !empty($m['dueDate']) ? $m['dueDate'] : null,
+                            'description' => $m['description'] ?? null,
+                            'status' => \App\Models\Milestone::STATUS_AWAITING_FUNDING,
+                        ]);
+                    }
+                }
+            }
+
             return $createdContract;
         });
 

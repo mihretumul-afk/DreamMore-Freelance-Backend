@@ -53,8 +53,14 @@ class Credential extends Model
 
     // LMS certificate types that are auto-verified from trusted source
     const TYPE_DREAM_MORE = 'dream_more_certificate';
+    const TYPE_EXTERNAL = 'external_certificate';
     const SOURCE_LMS = 'dream_more_lms';
     const SOURCE_EXTERNAL = 'external_manual';
+
+    const STATUS_PENDING = 'pending';
+    const STATUS_APPROVED = 'approved';
+    const STATUS_REJECTED = 'rejected';
+    const STATUS_RESUBMISSION_REQUIRED = 'resubmission_required';
 
     public function user(): BelongsTo
     {

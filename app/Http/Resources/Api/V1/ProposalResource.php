@@ -25,6 +25,7 @@ class ProposalResource extends JsonResource
             'bid_amount' => (float) $this->bid_amount,
             'currency' => $this->currency,
             'estimated_duration' => $this->estimated_duration,
+            'proposed_milestones' => $this->proposed_milestones ?? [],
             'status' => $this->status,
             'job' => $this->whenLoaded('job', function () {
                 return [

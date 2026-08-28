@@ -346,6 +346,18 @@ class AuditService
         );
     }
 
+    public static function credentialResubmissionRequested(int $credentialId, int $actorId, array $context = []): AuditLog
+    {
+        $label = self::actorLabel($actorId);
+        $title = $context['credential_title'] ?? "Credential #{$credentialId}";
+        $name  = $context['user_name'] ?? '';
+        return self::log(
+            AuditLog::ACTION_CREDENTIAL_RESUBMISSION_REQUESTED, AuditLog::MODULE_VERIFICATIONS,
+            'Credential', $credentialId, $context, $actorId,
+            "{$label} requested resubmission for credential \"{$title}\"" . ($name ? " for {$name}" : '')
+        );
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // DISPUTE actions
     // ═══════════════════════════════════════════════════════════════════

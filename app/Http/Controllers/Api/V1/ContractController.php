@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Events\ContractUpdated;
 use App\Http\Resources\Api\V1\ContractResource;
 use App\Models\Contract;
 use App\Models\EmployerProfile;
@@ -9,6 +10,7 @@ use App\Models\FreelancerProfile;
 use App\Models\Payment;
 use App\Models\Report;
 use App\Services\AuditService;
+use App\Services\ContractActivityService;
 use App\Services\NotificationService;
 use App\Services\PaymentService;
 use Illuminate\Http\JsonResponse;
@@ -70,6 +72,24 @@ class ContractController extends BaseApiController
         return $this->sendResponse(
             new ContractResource($contract),
             'Contract retrieved successfully.'
+        );
+    }
+
+    /**
+     * Get activity log for a contract.
+     */
+    public function activities(Request $request, Contract $contract): JsonResponse
+    {
+        $contract = $this->loadOwnedContract($request, $contract);
+        if ($contract instanceof JsonResponse) {
+            return $contract;
+        }
+
+        $activities = ContractActivityService::getActivities($contract, 100);
+
+        return $this->sendResponse(
+            $activities,
+            'Contract activities retrieved successfully.'
         );
     }
 
@@ -282,6 +302,22 @@ class ContractController extends BaseApiController
         });
 
         $contract->refresh()->load(['job', 'employer', 'freelancer', 'milestones']);
+
+        // Broadcast real-time update
+        broadcast(new ContractUpdated($contract, 'status_change', [
+            'action' => 'contract_' . $newStatus,
+            'previous_status' => $contract->getOriginal('status'),
+        ]));
+
+        // Log activity
+        $actorId = $request->user()->id;
+        match ($newStatus) {
+            'paused' => ContractActivityService::contractPaused($contract, $actorId),
+            'active' => ContractActivityService::contractResumed($contract, $actorId),
+            'completed' => ContractActivityService::contractCompleted($contract, $actorId),
+            'cancelled' => ContractActivityService::contractCancelled($contract, $actorId),
+            default => null,
+        };
 
         return $this->sendResponse(
             new ContractResource($contract),

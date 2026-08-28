@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Events\ContractUpdated;
+use App\Events\MilestoneUpdated;
 use App\Http\Requests\Api\V1\MilestoneRequest;
 use App\Http\Requests\Api\V1\MilestoneRevisionRequest;
 use App\Http\Requests\Api\V1\MilestoneSubmissionRequest;
@@ -14,6 +16,7 @@ use App\Models\Milestone;
 use App\Models\MilestoneAttachment;
 use App\Models\MilestoneSubmission;
 use App\Models\MilestoneSubmissionFile;
+use App\Services\ContractActivityService;
 use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,8 +25,68 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
+use App\Services\WalletService;
+
 class MilestoneController extends BaseApiController
 {
+    protected WalletService $walletService;
+
+    public function __construct(WalletService $walletService)
+    {
+        $this->walletService = $walletService;
+    }
+
+    /**
+     * Employer funds a milestone from available wallet balance into escrow.
+     */
+    public function fund(Request $request, Contract $contract, Milestone $milestone): JsonResponse
+    {
+        $guard = $this->requireEmployer($request);
+        if ($guard) {
+            return $guard;
+        }
+
+        $contract = $this->loadOwnedContract($request, $contract);
+        if ($contract instanceof JsonResponse) {
+            return $contract;
+        }
+
+        $milestone = $this->findScopedMilestone($contract, $milestone);
+        if ($milestone instanceof JsonResponse) {
+            return $milestone;
+        }
+
+        try {
+            $transaction = $this->walletService->fundMilestone($milestone, $request->user());
+
+            NotificationService::milestoneFunded(
+                $contract->freelancer_id,
+                $milestone->title,
+                $milestone->amount,
+                $contract->title,
+                $contract->id
+            );
+
+            $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
+
+            // Broadcast real-time update
+            broadcast(new MilestoneUpdated($milestone, 'funded', [
+                'action' => 'milestone_funded',
+                'amount' => $milestone->amount,
+            ]));
+
+            // Log activity
+            ContractActivityService::milestoneFunded($milestone, $request->user()->id);
+
+            return $this->sendResponse([
+                'milestone' => new MilestoneResource($milestone->fresh()),
+                'transaction' => $transaction,
+            ], 'Milestone funded into escrow successfully.');
+        } catch (\Exception $e) {
+            return $this->sendError($e->getMessage(), [], 422);
+        }
+    }
+
     /**
      * Milestone statuses the employer may still edit.
      */
@@ -88,12 +151,8 @@ class MilestoneController extends BaseApiController
             return $contract;
         }
 
-        if ($contract->status !== 'active') {
-            return $this->sendError('Milestones can only be created on active contracts.', [], 422);
-        }
-
-        if ($contract->status === 'disputed') {
-            return $this->sendError('Milestones cannot be created on disputed contracts.', [], 422);
+        if (!in_array($contract->status, ['active', 'pending', 'paused'], true)) {
+            return $this->sendError('Milestones can only be created on active or pending contracts.', [], 422);
         }
 
         $validated = $request->validated();
@@ -126,6 +185,15 @@ class MilestoneController extends BaseApiController
         });
 
         $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
+
+        // Broadcast real-time update
+        broadcast(new MilestoneUpdated($milestone, 'created', [
+            'action' => 'milestone_created',
+            'milestone_title' => $milestone->title,
+        ]));
+
+        // Log activity
+        ContractActivityService::milestoneCreated($milestone, $request->user()->id);
 
         return $this->sendResponse(
             new MilestoneResource($milestone),
@@ -174,8 +242,8 @@ class MilestoneController extends BaseApiController
             return $milestone;
         }
 
-        if ($contract->status !== 'active') {
-            return $this->sendError('Milestones can only be updated on active contracts.', [], 422);
+        if (!in_array($contract->status, ['active', 'pending', 'paused'], true)) {
+            return $this->sendError('Milestones can only be updated on active or pending contracts.', [], 422);
         }
 
         if (!in_array($milestone->status, self::EDITABLE_STATUSES, true)) {
@@ -204,6 +272,11 @@ class MilestoneController extends BaseApiController
         });
 
         $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
+
+        // Broadcast real-time update
+        broadcast(new MilestoneUpdated($milestone, 'updated', [
+            'action' => 'milestone_updated',
+        ]));
 
         return $this->sendResponse(
             new MilestoneResource($milestone->fresh()),
@@ -267,6 +340,14 @@ class MilestoneController extends BaseApiController
         );
 
         $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
+
+        // Broadcast real-time update
+        broadcast(new MilestoneUpdated($milestone, 'started', [
+            'action' => 'milestone_started',
+        ]));
+
+        // Log activity
+        ContractActivityService::milestoneStarted($milestone, $request->user()->id);
 
         return $this->sendResponse(
             new MilestoneResource($milestone->fresh()),
@@ -376,6 +457,14 @@ class MilestoneController extends BaseApiController
 
         $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
 
+        // Broadcast real-time update
+        broadcast(new MilestoneUpdated($milestone, 'submitted', [
+            'action' => 'milestone_submitted',
+        ]));
+
+        // Log activity
+        ContractActivityService::milestoneSubmitted($milestone, $request->user()->id);
+
         return $this->sendResponse(
             new MilestoneResource($milestone->fresh()),
             'Work submitted successfully.'
@@ -421,7 +510,7 @@ class MilestoneController extends BaseApiController
 
         $user = $request->user();
 
-        DB::transaction(function () use ($milestone, $contract, $user) {
+        try {
             // Update latest submission to approved
             $latestSubmission = $milestone->submissions()->where('status', 'submitted')->latest()->first();
             if ($latestSubmission) {
@@ -432,53 +521,34 @@ class MilestoneController extends BaseApiController
                 ]);
             }
 
-            // Update milestone status to approved (ready for release)
-            $milestone->update([
-                'status' => Milestone::STATUS_APPROVED,
-                'approved_at' => now(),
-            ]);
+            // Release escrow money to freelancer & platform fee
+            $result = $this->walletService->releaseMilestone($milestone, $user);
 
-            // Check if all milestones in contract are approved/released/paid
-            $allApproved = $contract->milestones()
-                ->whereNotIn('status', [
-                    Milestone::STATUS_APPROVED,
-                    Milestone::STATUS_RELEASED,
-                    Milestone::STATUS_PAID,
-                ])
-                ->doesntExist();
+            // Notify the freelancer about milestone approval
+            NotificationService::milestoneApproved(
+                $contract->freelancer_id,
+                $milestone->title,
+                $contract->title,
+                $contract->id
+            );
 
-            if ($allApproved) {
-                // Auto-complete contract
-                $contract->update([
-                    'status' => 'completed',
-                    'end_date' => now(),
-                ]);
+            $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
 
-                // Update job
-                if ($contract->job) {
-                    $contract->job->update(['status' => 'completed']);
-                }
+            // Broadcast real-time update
+            broadcast(new MilestoneUpdated($milestone, 'approved', [
+                'action' => 'milestone_approved',
+            ]));
 
-                // Notify both parties of completion
-                NotificationService::contractCompleted($contract->freelancer_id, $contract->title, 'freelancer');
-                NotificationService::contractCompleted($contract->employer_id, $contract->title, 'employer');
-            }
-        });
+            // Log activity
+            ContractActivityService::milestoneApproved($milestone, $user->id);
 
-        // Notify the freelancer about milestone approval
-        NotificationService::milestoneApproved(
-            $contract->freelancer_id,
-            $milestone->title,
-            $contract->title,
-            $contract->id
-        );
-
-        $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
-
-        return $this->sendResponse(
-            new MilestoneResource($milestone->fresh()),
-            'Milestone approved successfully.'
-        );
+            return $this->sendResponse(
+                new MilestoneResource($milestone->fresh()),
+                'Milestone approved and escrow funds released successfully.'
+            );
+        } catch (\Exception $e) {
+            return $this->sendError($e->getMessage(), [], 422);
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -548,6 +618,15 @@ class MilestoneController extends BaseApiController
         );
 
         $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
+
+        // Broadcast real-time update
+        broadcast(new MilestoneUpdated($milestone, 'revision_requested', [
+            'action' => 'milestone_revision_requested',
+            'revision_note' => $revisionNote,
+        ]));
+
+        // Log activity
+        ContractActivityService::milestoneRevisionRequested($milestone, $user->id, $revisionNote);
 
         return $this->sendResponse(
             new MilestoneResource($milestone->fresh()),
@@ -788,8 +867,8 @@ class MilestoneController extends BaseApiController
             return $milestone;
         }
 
-        if ($contract->status !== 'active') {
-            return $this->sendError('Milestones can only be deleted on active contracts.', [], 422);
+        if (!in_array($contract->status, ['active', 'pending', 'paused'], true)) {
+            return $this->sendError('Milestones can only be deleted on active or pending contracts.', [], 422);
         }
 
         // Only allow deleting milestones that haven't been funded yet
@@ -897,5 +976,35 @@ class MilestoneController extends BaseApiController
         }
 
         return $milestone;
+    }
+
+    /**
+     * Admin index: List all platform milestones across contracts with filters.
+     */
+    public function adminIndex(Request $request): JsonResponse
+    {
+        if ($request->user()->role !== 'admin') {
+            return $this->sendForbidden();
+        }
+
+        $query = Milestone::with(['contract.employer', 'contract.freelancer']);
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('title', 'like', "%{$search}%")
+                  ->orWhereHas('contract', function ($cq) use ($search) {
+                      $cq->where('title', 'like', "%{$search}%");
+                  });
+            });
+        }
+
+        $milestones = $query->orderBy('created_at', 'desc')->paginate($request->get('per_page', 15));
+
+        return $this->sendResponse(MilestoneResource::collection($milestones));
     }
 }

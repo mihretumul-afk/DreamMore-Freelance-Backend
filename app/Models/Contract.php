@@ -11,15 +11,26 @@ class Contract extends Model
 {
     use HasFactory;
 
+    // Status constants
+    const STATUS_DRAFT     = 'draft';
+    const STATUS_PENDING   = 'pending';
+    const STATUS_ACTIVE    = 'active';
+    const STATUS_PAUSED    = 'paused';
+    const STATUS_COMPLETED = 'completed';
+    const STATUS_CANCELLED = 'cancelled';
+    const STATUS_DISPUTED  = 'disputed';
+
     protected $fillable = [
         'job_id',
         'proposal_id',
         'employer_id',
         'freelancer_id',
         'title',
+        'contract_type',
         'budget_type',
         'agreed_rate',
         'total_amount',
+        'currency',
         'status',
         'start_date',
         'end_date',
@@ -30,6 +41,12 @@ class Contract extends Model
         'total_amount' => 'decimal:2',
         'start_date' => 'datetime',
         'end_date' => 'datetime',
+    ];
+
+    protected $attributes = [
+        'currency' => 'ETB',
+        'contract_type' => 'fixed',
+        'status' => 'pending',
     ];
 
     public function job(): BelongsTo
@@ -54,7 +71,17 @@ class Contract extends Model
 
     public function milestones(): HasMany
     {
-        return $this->hasMany(Milestone::class);
+        return $this->hasMany(Milestone::class)->orderBy('sort_order');
+    }
+
+    public function escrowTransactions(): HasMany
+    {
+        return $this->hasMany(EscrowTransaction::class);
+    }
+
+    public function disputes(): HasMany
+    {
+        return $this->hasMany(Dispute::class);
     }
 
     public function messages(): HasMany

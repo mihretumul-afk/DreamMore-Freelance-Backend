@@ -298,4 +298,43 @@ class VerificationController extends BaseApiController
             'Credential rejected successfully.'
         );
     }
+
+    public function requestResubmissionCredential(Request $request, Credential $credential): JsonResponse
+    {
+        if ($credential->status !== 'pending') {
+            return $this->sendError('Only pending credentials can be requested for resubmission.', [], 422);
+        }
+
+        $request->validate(['reason' => 'required|string|max:1000']);
+
+        $admin = $request->user();
+
+        $credential->update([
+            'status'           => 'resubmission_required',
+            'rejection_reason' => $request->input('reason'),
+            'reviewed_by'      => $admin->id,
+            'reviewed_at'      => now(),
+        ]);
+
+        Notification::create([
+            'user_id' => $credential->user_id,
+            'type'    => 'credential_resubmission_required',
+            'title'   => 'Credential Resubmission Required',
+            'message' => "Resubmission required for credential '{$credential->title}'. Reason: {$request->input('reason')}",
+            'link'    => '/freelancer/credentials',
+        ]);
+
+        // Audit log.
+        AuditService::credentialResubmissionRequested($credential->id, $admin->id, [
+            'user_id'          => $credential->user_id,
+            'user_name'        => $credential->user?->name,
+            'credential_title' => $credential->title,
+            'reason'           => $request->input('reason'),
+        ]);
+
+        return $this->sendResponse(
+            $credential->fresh()->load(['user', 'reviewer']),
+            'Resubmission requested successfully.'
+        );
+    }
 }

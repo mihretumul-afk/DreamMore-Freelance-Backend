@@ -18,11 +18,13 @@ class Proposal extends Model
         'bid_amount',
         'currency',
         'estimated_duration',
+        'proposed_milestones',
         'status',
     ];
 
     protected $casts = [
         'bid_amount' => 'decimal:2',
+        'proposed_milestones' => 'array',
     ];
 
     /**
