@@ -14,6 +14,9 @@ class TransactionController extends BaseApiController
     public function index(Request $request): JsonResponse
     {
         $query = Transaction::where('user_id', $request->user()->id)
+            ->with(['payment.payee' => function ($q) {
+                $q->select('id', 'name', 'email');
+            }])
             ->orderByDesc('created_at');
 
         if ($request->filled('type')) {
@@ -22,8 +25,21 @@ class TransactionController extends BaseApiController
 
         $transactions = $query->paginate(20);
 
+        // Transform transactions to include freelancer info from payment
+        $items = collect($transactions->items())->map(function ($tx) {
+            $data = $tx->toArray();
+            if ($tx->payment && $tx->payment->payee) {
+                $data['freelancer'] = [
+                    'id'    => $tx->payment->payee->id,
+                    'name'  => $tx->payment->payee->name,
+                    'email' => $tx->payment->payee->email,
+                ];
+            }
+            return $data;
+        });
+
         return $this->sendResponse(
-            $transactions->items(),
+            $items,
             'Transactions retrieved.',
             200,
             [

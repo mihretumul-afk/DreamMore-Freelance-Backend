@@ -89,6 +89,36 @@ class FinanceController extends BaseApiController
         $totalAvailableBalance = Wallet::sum('available_balance');
         $totalPendingBalance = Wallet::sum('pending_balance');
 
+        // Monthly revenue breakdown (last 6 months)
+        $monthlyRevenue = [];
+        for ($i = 5; $i >= 0; $i--) {
+            $monthStart = $now->copy()->subMonths($i)->startOfMonth();
+            $monthEnd = $now->copy()->subMonths($i)->endOfMonth();
+
+            $monthPaymentVolume = Payment::where('status', Payment::STATUS_COMPLETED)
+                ->where('type', Payment::TYPE_ESCROW_FUNDED)
+                ->whereBetween('processed_at', [$monthStart, $monthEnd])
+                ->sum('amount');
+
+            $monthPlatformRevenue = Payment::where('status', Payment::STATUS_COMPLETED)
+                ->where('type', Payment::TYPE_ESCROW_FUNDED)
+                ->whereBetween('processed_at', [$monthStart, $monthEnd])
+                ->sum('fee');
+
+            $monthReleased = Payment::where('status', Payment::STATUS_COMPLETED)
+                ->where('type', Payment::TYPE_MILESTONE_RELEASED)
+                ->whereBetween('processed_at', [$monthStart, $monthEnd])
+                ->sum('amount');
+
+            $monthlyRevenue[] = [
+                'month'             => $monthStart->format('M'),
+                'full_month'        => $monthStart->format('F Y'),
+                'payment_volume'    => (float) $monthPaymentVolume,
+                'platform_revenue'  => (float) $monthPlatformRevenue,
+                'released_funds'    => (float) $monthReleased,
+            ];
+        }
+
         return $this->sendResponse([
             'payment_volume' => [
                 'total'   => (float) $totalPaymentVolume,
@@ -98,6 +128,7 @@ class FinanceController extends BaseApiController
                 'total'   => (float) $totalPlatformRevenue,
                 'monthly' => (float) $monthlyPlatformRevenue,
             ],
+            'monthly_breakdown' => $monthlyRevenue,
             'held_funds'       => (float) max(0, $heldFunds),
             'released_funds'   => (float) $releasedFunds,
             'total_refunds'    => (float) $totalRefunds,
@@ -127,6 +158,13 @@ class FinanceController extends BaseApiController
         if ($request->filled('type')) {
             $query->where('type', $request->input('type'));
         }
+        if ($request->filled('date_from')) {
+            $query->where('created_at', '>=', $request->input('date_from'));
+        }
+        if ($request->filled('date_to')) {
+            $to = $request->input('date_to') . ' 23:59:59';
+            $query->where('created_at', '<=', $to);
+        }
 
         $payments = $query->orderByDesc('created_at')->paginate(20);
 
@@ -151,6 +189,13 @@ class FinanceController extends BaseApiController
 
         if ($request->filled('status')) {
             $query->where('status', $request->input('status'));
+        }
+        if ($request->filled('date_from')) {
+            $query->where('created_at', '>=', $request->input('date_from'));
+        }
+        if ($request->filled('date_to')) {
+            $to = $request->input('date_to') . ' 23:59:59';
+            $query->where('created_at', '<=', $to);
         }
 
         $withdrawals = $query->orderByDesc('created_at')->paginate(20);

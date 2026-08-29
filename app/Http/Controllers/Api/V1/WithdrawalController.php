@@ -103,10 +103,9 @@ class WithdrawalController extends BaseApiController
 
         $fee = WithdrawalService::calculateFee((float) $wallet->available_balance);
 
-        // Calculate totals from transactions
-        $totalWithdrawn = \App\Models\Transaction::where('user_id', $request->user()->id)
-            ->where('type', \App\Models\Transaction::TYPE_WITHDRAWAL)
-            ->where('direction', \App\Models\Transaction::DIR_DEBIT)
+        // Calculate total withdrawn from withdrawals table (includes requested, processing, and completed)
+        $totalWithdrawn = \App\Models\Withdrawal::where('user_id', $request->user()->id)
+            ->whereIn('status', ['requested', 'processing', 'completed'])
             ->sum('amount');
 
         $totalEarnings = \App\Models\Payment::where('payee_id', $request->user()->id)
@@ -122,5 +121,52 @@ class WithdrawalController extends BaseApiController
             'currency'          => $wallet->currency,
             'estimated_fee'     => $fee,
         ], 'Earnings retrieved.');
+    }
+
+    /**
+     * Get employer's finance summary.
+     */
+    public function employerFinance(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        // Total spent on milestone funding (payments made by employer)
+        $totalSpent = \App\Models\Payment::where('payer_id', $user->id)
+            ->where('type', \App\Models\Payment::TYPE_ESCROW_FUNDED)
+            ->where('status', \App\Models\Payment::STATUS_COMPLETED)
+            ->sum('amount');
+
+        // Total platform fees paid
+        $totalPlatformFees = \App\Models\Payment::where('payer_id', $user->id)
+            ->where('status', \App\Models\Payment::STATUS_COMPLETED)
+            ->sum('platform_fee');
+
+        // Total processing fees paid
+        $totalProcessingFees = \App\Models\Payment::where('payer_id', $user->id)
+            ->where('status', \App\Models\Payment::STATUS_COMPLETED)
+            ->sum('processing_fee');
+
+        // Pending payments (funded but not yet released)
+        $pendingPayments = \App\Models\Payment::where('payer_id', $user->id)
+            ->where('type', \App\Models\Payment::TYPE_ESCROW_FUNDED)
+            ->where('status', \App\Models\Payment::STATUS_COMPLETED)
+            ->whereHas('milestone', function ($q) {
+                $q->whereIn('status', ['funded', 'in_progress', 'submitted']);
+            })
+            ->sum('amount');
+
+        // Account balance (pre-funded or credit)
+        $wallet = \App\Models\Wallet::firstOrCreate(
+            ['user_id' => $user->id],
+            ['currency' => 'ETB']
+        );
+
+        return $this->sendResponse([
+            'account_balance'   => (float) $wallet->available_balance,
+            'pending_payments'  => (float) $pendingPayments,
+            'total_spent'       => (float) $totalSpent,
+            'total_fees'        => (float) ($totalPlatformFees + $totalProcessingFees),
+            'currency'          => $wallet->currency,
+        ], 'Employer finance retrieved.');
     }
 }

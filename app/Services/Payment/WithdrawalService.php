@@ -92,6 +92,16 @@ class WithdrawalService
                 $netAmount
             );
 
+            // Broadcast finance update
+            \App\Events\FinanceUpdated::dispatch('withdrawal_requested', [
+                'withdrawal_id' => $withdrawal->id,
+                'reference'     => $reference,
+                'amount'        => $amount,
+                'fee'           => $fee,
+                'net_amount'    => $netAmount,
+                'user_id'       => $userId,
+            ], $userId);
+
             return $withdrawal;
         });
     }
@@ -157,6 +167,16 @@ class WithdrawalService
                     $withdrawal->fee,
                     $withdrawal->net_amount
                 );
+
+                // Broadcast finance update
+                \App\Events\FinanceUpdated::dispatch('withdrawal_completed', [
+                    'withdrawal_id' => $withdrawal->id,
+                    'reference'     => $withdrawal->reference,
+                    'amount'        => $withdrawal->amount,
+                    'fee'           => $withdrawal->fee,
+                    'net_amount'    => $withdrawal->net_amount,
+                    'user_id'       => $withdrawal->user_id,
+                ], $withdrawal->user_id);
             } else {
                 $withdrawal->update([
                     'status'         => Withdrawal::STATUS_FAILED,

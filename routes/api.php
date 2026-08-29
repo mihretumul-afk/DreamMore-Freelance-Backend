@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\V1\ProposalController;
 use App\Http\Controllers\Api\V1\SkillController;
 use App\Http\Controllers\Api\V1\PlatformSettingsController;
 use App\Http\Controllers\Api\V1\VerificationSubmissionController;
+use App\Http\Controllers\Api\V1\BudgetController;
 
 /*
 |--------------------------------------------------------------------------
@@ -169,6 +170,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/disputes', [DisputeController::class, 'index']);
     Route::get('/disputes/{report}', [DisputeController::class, 'show']);
     Route::post('/disputes/{report}/notes', [DisputeController::class, 'addNote']);
+    Route::delete('/disputes/{report}', [DisputeController::class, 'destroy']);
 });
 
 // ── Contracts ───────────────────────────────────────────────────────────
@@ -221,6 +223,7 @@ Route::middleware('auth:sanctum')->group(function () {
 // ── Earnings & Withdrawals ──────────────────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/earnings', [WithdrawalController::class, 'earnings']);
+    Route::get('/employer-finance', [WithdrawalController::class, 'employerFinance']);
     Route::get('/withdrawals', [WithdrawalController::class, 'index']);
     Route::post('/withdrawals', [WithdrawalController::class, 'store']);
     Route::post('/withdrawals/{withdrawal}/cancel', [WithdrawalController::class, 'cancel']);
@@ -229,6 +232,12 @@ Route::middleware('auth:sanctum')->group(function () {
 // ── Transactions (Financial Ledger) ─────────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/transactions', [TransactionController::class, 'index']);
+});
+
+// ── Budget (Employer) ───────────────────────────────────────────────────
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/budget', [BudgetController::class, 'show']);
+    Route::post('/budget', [BudgetController::class, 'store']);
 });
 
 // ── Webhooks ────────────────────────────────────────────────────────────

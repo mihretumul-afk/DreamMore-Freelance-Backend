@@ -150,6 +150,17 @@ class PaymentService
                 $amount
             );
 
+            // Broadcast finance update
+            \App\Events\FinanceUpdated::dispatch('milestone_funded', [
+                'payment_id'     => $payment->id,
+                'milestone_id'   => $milestone->id,
+                'milestone_title' => $milestone->title,
+                'amount'         => $amount,
+                'platform_fee'   => $fees['platform_fee'],
+                'employer_id'    => $employerId,
+                'freelancer_id'  => $contract->freelancer_id,
+            ], $employerId);
+
             return $payment;
         });
     }
@@ -236,6 +247,16 @@ class PaymentService
                 $contract->id,
                 $releaseAmount
             );
+
+            // Broadcast finance update
+            \App\Events\FinanceUpdated::dispatch('milestone_released', [
+                'payment_id'      => $releasePayment->id,
+                'milestone_id'    => $milestone->id,
+                'milestone_title' => $milestone->title,
+                'amount'          => $releaseAmount,
+                'employer_id'     => $payment->payer_id,
+                'freelancer_id'   => $freelancerId,
+            ], $payment->payer_id);
 
             // Check if all milestones are released → contract completed
             $allReleased = $contract->milestones()

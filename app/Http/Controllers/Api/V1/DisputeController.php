@@ -157,6 +157,23 @@ class DisputeController extends BaseApiController
     }
 
     /**
+     * Delete/dismiss a dispute. Only the reporter or a contract party can delete.
+     */
+    public function destroy(Request $request, Report $report): JsonResponse
+    {
+        $user = $request->user();
+
+        if (!$this->userCanAccessReport($user, $report)) {
+            return $this->sendForbidden('You do not have access to this dispute.');
+        }
+
+        // Soft-delete: mark as dismissed instead of hard delete
+        $report->update(['status' => 'dismissed']);
+
+        return $this->sendResponse(null, 'Dispute removed from your history.');
+    }
+
+    /**
      * Check if user is authorized to access the report.
      */
     private function userCanAccessReport($user, Report $report): bool
