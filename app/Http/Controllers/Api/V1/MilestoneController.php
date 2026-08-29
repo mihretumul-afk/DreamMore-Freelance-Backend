@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Resources\Api\V1\MilestoneResource;
 use App\Models\Contract;
 use App\Models\Milestone;
+use App\Models\MilestoneAttachment;
 use App\Models\MilestoneSubmission;
 use App\Services\AuditService;
 use App\Services\NotificationService;
@@ -12,6 +13,7 @@ use App\Services\Payment\PaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class MilestoneController extends BaseApiController
 {
@@ -27,7 +29,7 @@ class MilestoneController extends BaseApiController
         }
 
         $milestones = $contract->milestones()
-            ->with(['creator', 'submissions' => fn ($q) => $q->latest()])
+            ->with(['creator', 'attachments', 'submissions' => fn ($q) => $q->latest()])
             ->orderBy('created_at')
             ->get();
 
@@ -52,7 +54,7 @@ class MilestoneController extends BaseApiController
             return $this->sendError('Milestone not found for this contract.', [], 404);
         }
 
-        $milestone->load(['creator', 'submissions' => fn ($q) => $q->latest()->with('submitter')]);
+        $milestone->load(['creator', 'attachments', 'submissions' => fn ($q) => $q->latest()->with('submitter')]);
 
         return $this->sendResponse(
             new MilestoneResource($milestone),
@@ -81,9 +83,20 @@ class MilestoneController extends BaseApiController
             'deliverables' => 'nullable|string|max:5000',
             'amount'       => 'required|numeric|min:0|max:999999.99',
             'due_date'     => 'nullable|date|after:now',
+            'files'        => 'nullable|array|max:10',
+            'files.*'      => 'file|max:204800|mimes:jpg,jpeg,png,gif,webp,svg,mp4,mov,avi,mkv,webm,mp3,wav,ogg,flac,pdf,doc,docx,xls,xlsx,ppt,pptx,zip,rar,7z,txt,csv',
         ]);
 
-        $milestone = DB::transaction(function () use ($validated, $contract, $user) {
+        // Max 200MB per file for milestone attachments
+        if ($request->hasFile('files')) {
+            foreach ((array) $request->file('files') as $file) {
+                if ($file->getSize() > 204800 * 1024) {
+                    return $this->sendError('Each file must be under 200MB. "' . $file->getClientOriginalName() . '" is too large.', [], 422);
+                }
+            }
+        }
+
+        $milestone = DB::transaction(function () use ($validated, $contract, $user, $request) {
             $milestone = $contract->milestones()->create([
                 'title'        => $validated['title'],
                 'description'  => $validated['description'] ?? null,
@@ -93,6 +106,22 @@ class MilestoneController extends BaseApiController
                 'created_by'   => $user->id,
                 'status'       => Milestone::STATUS_DRAFT,
             ]);
+
+            // Handle file uploads — store in milestone-attachments/{milestone_id}
+            if ($request->hasFile('files')) {
+                foreach ($request->file('files') as $file) {
+                    if ($file->isValid()) {
+                        $path = $file->store('milestone-attachments/' . $milestone->id, 'public');
+                        $milestone->attachments()->create([
+                            'uploader_id'       => $user->id,
+                            'original_filename' => $file->getClientOriginalName(),
+                            'stored_path'       => $path,
+                            'mime_type'         => $file->getMimeType(),
+                            'file_size'         => $file->getSize(),
+                        ]);
+                    }
+                }
+            }
 
             // Notify freelancer
             NotificationService::milestoneCreated(
@@ -114,7 +143,7 @@ class MilestoneController extends BaseApiController
             return $milestone;
         });
 
-        $milestone->load(['creator']);
+        $milestone->load(['creator', 'attachments']);
 
         return $this->sendResponse(
             new MilestoneResource($milestone),
@@ -255,7 +284,18 @@ class MilestoneController extends BaseApiController
             'description' => 'nullable|string|max:5000',
             'links'       => 'nullable|array|max:10',
             'links.*'     => 'url|max:2048',
+            'files'       => 'nullable|array|max:10',
+            'files.*'     => 'file|max:409600|mimes:jpg,jpeg,png,gif,webp,svg,mp4,mov,avi,mkv,webm,mp3,wav,ogg,flac,pdf,doc,docx,xls,xlsx,ppt,pptx,zip,rar,7z,txt,csv',
         ]);
+
+        // Max 400MB per file for submissions
+        if ($request->hasFile('files')) {
+            foreach ((array) $request->file('files') as $file) {
+                if ($file->getSize() > 409600 * 1024) {
+                    return $this->sendError('Each file must be under 400MB. "' . $file->getClientOriginalName() . '" is too large.', [], 422);
+                }
+            }
+        }
 
         // Handle file uploads
         $uploadedFiles = [];

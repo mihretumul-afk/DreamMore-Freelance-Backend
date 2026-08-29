@@ -39,6 +39,20 @@ class MilestoneResource extends JsonResource
                 'avatar' => $this->creator->avatar,
             ]),
 
+            'attachments' => $this->whenLoaded('attachments', function () {
+                return $this->attachments->map(fn ($att) => [
+                    'id'       => $att->id,
+                    'name'     => $att->original_filename,
+                    'path'     => $att->stored_path,
+                    'type'     => $att->mime_type,
+                    'size'     => $att->file_size,
+                    'formatted_size' => $att->formatted_size,
+                    'is_video' => $att->isVideo(),
+                    'is_image' => $att->isImage(),
+                    'is_audio' => $att->isAudio(),
+                ]);
+            }),
+
             'submissions' => $this->whenLoaded('submissions', function () {
                 return $this->submissions->map(fn ($sub) => [
                     'id'            => $sub->id,

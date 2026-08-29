@@ -175,6 +175,7 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/contracts', [ContractController::class, 'index']);
     Route::get('/contracts/{contract}', [ContractController::class, 'show']);
+    Route::delete('/contracts/{contract}', [ContractController::class, 'destroy']);
     Route::post('/contracts/{contract}/freelancer/accept', [ContractController::class, 'freelancerAccept']);
     Route::post('/contracts/{contract}/freelancer/decline', [ContractController::class, 'freelancerDecline']);
 });
@@ -196,15 +197,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/contracts/{contract}/milestones/{milestone}/submissions/{submission}/files', [MilestoneController::class, 'deleteSubmissionFile']);
 });
 
-// ── Serve milestone submission files ──────────────────────────────────────
-Route::middleware('auth:sanctum')->get('/milestone-submissions/{path}', function ($path) {
-    $fullPath = storage_path('app/public/milestone-submissions/' . $path);
-    if (!file_exists($fullPath)) {
-        return response()->json(['message' => 'File not found.'], 404);
-    }
-    $mime = mime_content_type($fullPath);
-    return response()->file($fullPath, ['Content-Type' => $mime]);
-})->where('path', '.*');
+// ── Serve milestone files ─────────────────────────────────────────────────
+// Auth handled manually in controller (avoids Sanctum redirect-to-login issue)
+Route::get('/milestone-submissions/{path}', [\App\Http\Controllers\Api\V1\FileController::class, 'milestoneSubmission'])->where('path', '.*');
+Route::get('/milestone-attachments/{path}', [\App\Http\Controllers\Api\V1\FileController::class, 'milestoneAttachment'])->where('path', '.*');
+Route::delete('/milestone-attachments/{attachment}', [\App\Http\Controllers\Api\V1\FileController::class, 'destroyAttachment']);
 
 // ── Payment Methods ──────────────────────────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {

@@ -191,4 +191,41 @@ class ContractController extends BaseApiController
 
         return $this->sendResponse(null, 'Contract declined successfully.');
     }
+
+    /**
+     * Delete a contract from history.
+     * Only completed, cancelled, disputed, or pending contracts can be deleted.
+     * Active/paused contracts cannot be deleted.
+     */
+    public function destroy(Request $request, Contract $contract): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($contract->employer_id !== $user->id && $contract->freelancer_id !== $user->id) {
+            return $this->sendForbidden('You do not have access to this contract.');
+        }
+
+        $deletableStatuses = [
+            Contract::STATUS_PENDING,
+            Contract::STATUS_ACTIVE,
+            Contract::STATUS_COMPLETED,
+            Contract::STATUS_CANCELLED,
+            Contract::STATUS_DISPUTED,
+        ];
+
+        if (!in_array($contract->status, $deletableStatuses, true)) {
+            return $this->sendError(
+                "Cannot delete a contract with status '{$contract->status}'.",
+                [],
+                422
+            );
+        }
+
+        DB::transaction(function () use ($contract) {
+            $contract->milestones()->delete();
+            $contract->delete();
+        });
+
+        return $this->sendResponse(null, 'Contract deleted from your history.');
+    }
 }

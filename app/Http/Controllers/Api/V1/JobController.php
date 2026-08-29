@@ -20,6 +20,11 @@ class JobController extends BaseApiController
     private const EDITABLE_STATUSES = ['draft', 'open', 'closed'];
 
     /**
+     * Job statuses the owner may delete (includes history jobs).
+     */
+    private const DELETABLE_STATUSES = ['draft', 'open', 'closed', 'in_progress', 'completed'];
+
+    /**
      * Allowed job status transitions (Stage 13: close / reopen).
      */
     private const STATUS_TRANSITIONS = [
@@ -133,10 +138,14 @@ class JobController extends BaseApiController
             return $guard;
         }
 
-        $jobs = Job::with(['category', 'skills', 'employer'])
-            ->when($request->user()->role !== 'admin', fn ($query) => $query->where('employer_id', $request->user()->id))
-            ->orderByDesc('created_at')
-            ->paginate(15);
+        $query = Job::with(['category', 'skills', 'employer'])
+            ->when($request->user()->role !== 'admin', fn ($q) => $q->where('employer_id', $request->user()->id));
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->input('status'));
+        }
+
+        $jobs = $query->orderByDesc('created_at')->paginate(15);
 
         return $this->sendResponse(
             JobResource::collection($jobs),
@@ -228,7 +237,8 @@ class JobController extends BaseApiController
     }
 
     /**
-     * Employer deletes their own job (no proposals, not in progress/completed/cancelled).
+     * Employer deletes their own job.
+     * Draft/open jobs with proposals cannot be deleted; closed/in-progress/completed jobs can.
      */
     public function destroy(Request $request, Job $job): JsonResponse
     {
@@ -242,16 +252,18 @@ class JobController extends BaseApiController
             return $job;
         }
 
-        if (!in_array($job->status, self::EDITABLE_STATUSES, true)) {
+        if (!in_array($job->status, self::DELETABLE_STATUSES, true)) {
             return $this->sendError(
-                "Only draft, open or closed jobs can be deleted. Current status: '{$job->status}'.",
+                "Only draft, open, closed, in-progress or completed jobs can be deleted. Current status: '{$job->status}'.",
                 [],
                 422
             );
         }
 
-        if ($job->proposals()->exists()) {
-            return $this->sendError('Jobs with proposals cannot be deleted.', [], 422);
+        // Draft and open jobs with proposals cannot be deleted (they may have active interest).
+        // Closed, in-progress and completed jobs can be deleted as history cleanup.
+        if (in_array($job->status, ['draft', 'open'], true) && $job->proposals()->exists()) {
+            return $this->sendError('Jobs with proposals cannot be deleted. Close the job first.', [], 422);
         }
 
         DB::transaction(function () use ($job) {

@@ -73,6 +73,11 @@ class Milestone extends Model
         return $this->hasMany(MilestoneSubmission::class)->orderByDesc('created_at');
     }
 
+    public function attachments(): HasMany
+    {
+        return $this->hasMany(MilestoneAttachment::class)->orderByDesc('created_at');
+    }
+
     // ── Helper methods ────────────────────────────────────────────────────
 
     public function isDraft(): bool
