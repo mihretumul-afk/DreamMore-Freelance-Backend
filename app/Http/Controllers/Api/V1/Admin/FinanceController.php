@@ -77,14 +77,13 @@ class FinanceController extends BaseApiController
         $failedPayments = Payment::where('status', Payment::STATUS_FAILED)
             ->count();
 
-        // Disputed funds
-        $disputedFunds = DB::table('payments')
-            ->where('status', Payment::STATUS_COMPLETED)
-            ->where('type', Payment::TYPE_ESCROW_FUNDED)
-            ->where('milestone_id', function ($q) {
-                $q->select('id')->from('milestones')->where('status', 'disputed');
-            })
-            ->sum('amount');
+        // Disputed funds (escrow amount for currently disputed milestones)
+        $disputedFunds = (float) DB::table('payments')
+            ->join('milestones', 'payments.milestone_id', '=', 'milestones.id')
+            ->where('payments.status', Payment::STATUS_COMPLETED)
+            ->where('payments.type', Payment::TYPE_ESCROW_FUNDED)
+            ->where('milestones.status', 'disputed')
+            ->sum('payments.amount');
 
         // Wallets
         $totalAvailableBalance = Wallet::sum('available_balance');
