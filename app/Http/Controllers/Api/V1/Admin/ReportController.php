@@ -4,25 +4,30 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Api\V1\BaseApiController;
 use App\Models\Contract;
-use App\Models\EmployerProfile;
-use App\Models\FreelancerProfile;
-use App\Models\Payment;
+use App\Models\Milestone;
 use App\Models\Report;
 use App\Services\AuditService;
 use App\Services\NotificationService;
-use App\Services\PaymentService;
+use App\Services\Payment\PaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class ReportController extends BaseApiController
 {
+    /**
+     * List all reports (disputes).
+     */
     public function index(Request $request): JsonResponse
     {
         $query = Report::with('reporter');
 
         if ($request->filled('status')) {
             $query->where('status', $request->input('status'));
+        }
+
+        if ($request->filled('target_type')) {
+            $query->where('target_type', $request->input('target_type'));
         }
 
         $reports = $query->orderByDesc('created_at')->paginate(15);
@@ -40,21 +45,115 @@ class ReportController extends BaseApiController
         );
     }
 
+    /**
+     * Show a single report with its related milestone & contract.
+    /**
+     * Parse raw admin_notes string into a structured array of note objects.
+     */
+    public static function parseNotes(?string $rawNotes): array
+    {
+        if (empty($rawNotes)) {
+            return [];
+        }
+
+        $decoded = json_decode($rawNotes, true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            return $decoded;
+        }
+
+        // Legacy string format fallback
+        return [
+            [
+                'id'             => '1',
+                'sender_id'       => 0,
+                'sender_name'     => 'Admin',
+                'sender_role'     => 'admin',
+                'recipient_type' => 'both',
+                'note'           => $rawNotes,
+                'created_at'     => now()->toIso8601String(),
+            ]
+        ];
+    }
+
+    /**
+     * Show a single report with its related milestone & contract.
+     */
     public function show(Report $report): JsonResponse
     {
         $report->load('reporter');
 
-        $target = null;
-        if ($report->target_type === 'contract') {
-            $target = Contract::with(['employer', 'freelancer', 'job', 'milestones'])->find($report->target_id);
-        }
+        $data = $report->toArray();
+        $data['notes_list'] = self::parseNotes($report->admin_notes);
 
-        $data         = $report->toArray();
-        $data['target'] = $target;
+        // Attach the related milestone and contract if this is a milestone dispute
+        if ($report->target_type === 'milestone') {
+            $milestone = Milestone::with(['contract.employer', 'contract.freelancer', 'submissions'])->find($report->target_id);
+            if ($milestone) {
+                $data['milestone'] = $milestone->toArray();
+                $data['contract']  = $milestone->contract ? $milestone->contract->toArray() : null;
+            }
+        }
 
         return $this->sendResponse($data, 'Report retrieved successfully.');
     }
 
+    /**
+     * Admin adds a note/comment to the dispute for communication.
+     */
+    public function addNote(Request $request, Report $report): JsonResponse
+    {
+        $request->validate([
+            'note'           => 'required|string|max:5000',
+            'recipient_type' => 'nullable|string|in:freelancer,employer,both',
+        ]);
+
+        $actor         = $request->user();
+        $noteText      = $request->input('note');
+        $recipientType = $request->input('recipient_type', 'both');
+
+        $notesList = self::parseNotes($report->admin_notes);
+        $notesList[] = [
+            'id'             => (string) \Illuminate\Support\Str::uuid(),
+            'sender_id'       => $actor->id,
+            'sender_name'     => $actor->name,
+            'sender_role'     => 'admin',
+            'recipient_type' => $recipientType,
+            'note'           => $noteText,
+            'created_at'     => now()->toIso8601String(),
+        ];
+
+        $report->update(['admin_notes' => json_encode($notesList)]);
+
+        // Find associated contract parties
+        $contract = null;
+        if ($report->target_type === 'milestone') {
+            $milestone = Milestone::with('contract')->find($report->target_id);
+            $contract  = $milestone?->contract;
+        } elseif ($report->target_type === 'contract') {
+            $contract  = Contract::find($report->target_id);
+        }
+
+        $employerId   = $contract?->employer_id ?? ($report->reporter_id);
+        $freelancerId = $contract?->freelancer_id;
+
+        // Send targeted notifications
+        if (($recipientType === 'employer' || $recipientType === 'both') && $employerId) {
+            NotificationService::disputeUpdate($employerId, $report->reason, $report->id, $noteText, 'employer');
+        }
+
+        if (($recipientType === 'freelancer' || $recipientType === 'both') && $freelancerId) {
+            NotificationService::disputeUpdate($freelancerId, $report->reason, $report->id, $noteText, 'freelancer');
+        }
+
+        $responseData = $report->fresh()->load('reporter')->toArray();
+        $responseData['notes_list'] = $notesList;
+
+        return $this->sendResponse($responseData, 'Note added successfully.');
+    }
+
+    /**
+     * Resolve a dispute: admin decides to release funds to freelancer or refund employer.
+     */
     public function resolve(Request $request, Report $report): JsonResponse
     {
         if ($report->status !== 'pending') {
@@ -62,136 +161,122 @@ class ReportController extends BaseApiController
         }
 
         $request->validate([
-            'resolution'      => 'nullable|string|max:2000',
-            'contract_action' => 'nullable|in:active,completed,cancelled',
-            'payment_action'  => 'nullable|in:release,refund,hold',
+            'resolution'       => 'nullable|string|max:2000',
+            'resolution_type'  => 'required|in:release_to_freelancer,refund_to_employer',
         ]);
 
-        $contractAction = $request->input('contract_action', 'active');
-        $paymentAction  = $request->input('payment_action', 'hold');
         $actor          = $request->user();
+        $resolutionType = $request->input('resolution_type');
+        $resolutionNote = $request->input('resolution');
 
-        DB::transaction(function () use ($report, $request, $contractAction, $paymentAction, $actor) {
+        DB::transaction(function () use ($report, $actor, $resolutionType, $resolutionNote) {
+            // Update the report
             $report->update([
-                'status'      => 'resolved',
-                'resolution'  => $request->input('resolution'),
-                'resolved_at' => now(),
+                'status'           => 'resolved',
+                'resolution'       => $resolutionNote,
+                'resolution_type'  => $resolutionType,
+                'resolved_at'      => now(),
             ]);
 
-            if ($report->target_type === 'contract') {
-                $contract = Contract::find($report->target_id);
+            $paymentService = app(PaymentService::class);
+
+            // Handle milestone disputes
+            if ($report->target_type === 'milestone') {
+                $milestone = Milestone::with('contract')->find($report->target_id);
+
+                if ($milestone && $milestone->contract) {
+                    $contract = $milestone->contract;
+                    $amount   = (float) $milestone->amount;
+
+                    $report->update(['resolution_amount' => $amount]);
+
+                    // Unset contract disputed status if no other active disputes
+                    $remainingDisputes = $contract->milestones()
+                        ->where('status', Milestone::STATUS_DISPUTED)
+                        ->where('id', '!=', $milestone->id)
+                        ->count();
+
+                    if ($remainingDisputes === 0) {
+                        $contract->update(['status' => Contract::STATUS_ACTIVE]);
+                    }
+
+                    if ($resolutionType === 'release_to_freelancer') {
+                        // Admin rules in favor of freelancer — approve & release funds
+                        $milestone->update([
+                            'status'      => Milestone::STATUS_APPROVED,
+                            'approved_at' => now(),
+                        ]);
+
+                        try {
+                            $paymentService->releaseMilestone($milestone, $actor->id);
+                        } catch (\Exception $e) {
+                            \Illuminate\Support\Facades\Log::warning('Failed to release disputed milestone funds', [
+                                'milestone_id' => $milestone->id,
+                                'error'        => $e->getMessage(),
+                            ]);
+                        }
+
+                        NotificationService::disputeResolved($contract->freelancer_id, $contract->title, $contract->id, 'freelancer', 'released');
+                        NotificationService::disputeResolved($contract->employer_id, $contract->title, $contract->id, 'employer', 'released');
+
+                    } else {
+                        // Admin rules in favor of employer — refund funds to employer
+                        try {
+                            $paymentService->refundMilestone($milestone, $actor->id, $resolutionNote ?? 'Dispute resolved in favor of employer');
+                        } catch (\Exception $e) {
+                            \Illuminate\Support\Facades\Log::warning('Failed to refund disputed milestone funds', [
+                                'milestone_id' => $milestone->id,
+                                'error'        => $e->getMessage(),
+                            ]);
+                        }
+
+                        NotificationService::disputeResolved($contract->employer_id, $contract->title, $contract->id, 'employer', 'refunded');
+                        NotificationService::disputeResolved($contract->freelancer_id, $contract->title, $contract->id, 'freelancer', 'refunded');
+                    }
+                }
+            } elseif ($report->target_type === 'contract') {
+                $contract = Contract::with('milestones')->find($report->target_id);
                 if ($contract) {
-                    $contract->update([
-                        'status'   => $contractAction,
-                        'end_date' => in_array($contractAction, ['completed', 'cancelled'], true)
-                            ? now()
-                            : $contract->end_date,
-                    ]);
+                    $contract->update(['status' => Contract::STATUS_ACTIVE]);
 
-                    if ($contractAction === 'completed') {
-                        if ($contract->job) {
-                            $contract->job->update(['status' => 'completed']);
-                        }
-                        $freelancerProfile = FreelancerProfile::where('user_id', $contract->freelancer_id)->first();
-                        if ($freelancerProfile) {
-                            $freelancerProfile->increment('completed_jobs_count');
-                            $freelancerProfile->increment('total_earnings', (float) $contract->total_amount);
-                        }
-                        $employerProfile = EmployerProfile::where('user_id', $contract->employer_id)->first();
-                        if ($employerProfile) {
-                            $employerProfile->increment('total_spent', (float) $contract->total_amount);
+                    $targetMilestones = $contract->milestones()
+                        ->whereIn('status', [Milestone::STATUS_DISPUTED, Milestone::STATUS_SUBMITTED, Milestone::STATUS_FUNDED, Milestone::STATUS_IN_PROGRESS])
+                        ->get();
+
+                    foreach ($targetMilestones as $milestone) {
+                        if ($resolutionType === 'release_to_freelancer') {
+                            $milestone->update(['status' => Milestone::STATUS_APPROVED, 'approved_at' => now()]);
+                            try {
+                                $paymentService->releaseMilestone($milestone, $actor->id);
+                            } catch (\Exception $e) {}
+                        } else {
+                            try {
+                                $paymentService->refundMilestone($milestone, $actor->id, $resolutionNote ?? 'Contract dispute resolved in favor of employer');
+                            } catch (\Exception $e) {}
                         }
                     }
 
-                    // Handle payment decisions for disputed milestones
-                    if ($paymentAction !== 'hold') {
-                        $disputedMilestones = $contract->milestones()
-                            ->where('status', 'disputed')
-                            ->whereNotNull('escrow_funded_at')
-                            ->whereNull('paid_at')
-                            ->get();
-
-                        foreach ($disputedMilestones as $milestone) {
-                            if ($paymentAction === 'release') {
-                                // Release payment to freelancer
-                                try {
-                                    PaymentService::releaseMilestonePayment(
-                                        $contract,
-                                        $milestone,
-                                        $actor->id
-                                    );
-                                } catch (\RuntimeException $e) {
-                                    // Log but don't fail the whole resolution
-                                    AuditService::log(
-                                        \App\Models\AuditLog::ACTION_PAYMENT_PROCESSED,
-                                        \App\Models\AuditLog::MODULE_PAYMENTS,
-                                        'Milestone', $milestone->id,
-                                        ['error' => $e->getMessage()],
-                                        $actor->id,
-                                        "Failed to release payment for milestone \"{$milestone->title}\": {$e->getMessage()}"
-                                    );
-                                }
-                            } elseif ($paymentAction === 'refund') {
-                                // Refund the employer
-                                $payment = Payment::where('milestone_id', $milestone->id)
-                                    ->where('type', Payment::TYPE_ESCROW_FUNDED)
-                                    ->where('status', Payment::STATUS_DISPUTED)
-                                    ->first();
-
-                                if ($payment) {
-                                    try {
-                                        PaymentService::approveRefund(
-                                            $payment,
-                                            $actor->id,
-                                            null,
-                                            'Dispute resolution: refund to employer'
-                                        );
-                                    } catch (\RuntimeException $e) {
-                                        AuditService::log(
-                                            \App\Models\AuditLog::ACTION_PAYMENT_REFUNDED,
-                                            \App\Models\AuditLog::MODULE_PAYMENTS,
-                                            'Payment', $payment->id,
-                                            ['error' => $e->getMessage()],
-                                            $actor->id,
-                                            "Failed to refund payment {$payment->reference}: {$e->getMessage()}"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    NotificationService::disputeResolved(
-                        $contract->freelancer_id,
-                        $contract->title,
-                        $contract->id,
-                        'freelancer',
-                        $contractAction
-                    );
-                    NotificationService::disputeResolved(
-                        $contract->employer_id,
-                        $contract->title,
-                        $contract->id,
-                        'employer',
-                        $contractAction
-                    );
+                    NotificationService::disputeResolved($contract->freelancer_id, $contract->title, $contract->id, 'freelancer', $resolutionType === 'release_to_freelancer' ? 'released' : 'refunded');
+                    NotificationService::disputeResolved($contract->employer_id, $contract->title, $contract->id, 'employer', $resolutionType === 'release_to_freelancer' ? 'released' : 'refunded');
                 }
             }
 
-            // Audit log the dispute resolution.
+            // Audit log
             AuditService::disputeResolved($report->id, $actor->id, [
                 'reason'          => $report->reason,
                 'target_type'     => $report->target_type,
                 'target_id'       => $report->target_id,
-                'resolution'      => $request->input('resolution'),
-                'contract_action' => $contractAction,
-                'payment_action'  => $paymentAction,
+                'resolution'      => $resolutionNote,
+                'resolution_type' => $resolutionType,
             ]);
         });
 
-        return $this->sendResponse($report->fresh()->load('reporter'), 'Report resolved successfully.');
+        return $this->sendResponse($report->fresh()->load('reporter'), 'Dispute resolved successfully.');
     }
 
+    /**
+     * Dismiss a report.
+     */
     public function dismiss(Report $report): JsonResponse
     {
         if ($report->status !== 'pending') {
@@ -200,35 +285,12 @@ class ReportController extends BaseApiController
 
         $actor = request()->user();
 
-        DB::transaction(function () use ($report, $actor) {
+        DB::transaction(function () use ($report) {
             $report->update([
                 'status'      => 'dismissed',
                 'resolved_at' => now(),
             ]);
 
-            if ($report->target_type === 'contract') {
-                $contract = Contract::find($report->target_id);
-                if ($contract && $contract->status === 'disputed') {
-                    $contract->update(['status' => 'active']);
-
-                    NotificationService::disputeResolved(
-                        $contract->freelancer_id,
-                        $contract->title,
-                        $contract->id,
-                        'freelancer',
-                        'active'
-                    );
-                    NotificationService::disputeResolved(
-                        $contract->employer_id,
-                        $contract->title,
-                        $contract->id,
-                        'employer',
-                        'active'
-                    );
-                }
-            }
-
-            // Audit log the dismissal.
             AuditService::disputeDismissed($report->id, $actor->id, [
                 'reason'      => $report->reason,
                 'target_type' => $report->target_type,
@@ -239,6 +301,9 @@ class ReportController extends BaseApiController
         return $this->sendResponse($report->fresh()->load('reporter'), 'Report dismissed successfully.');
     }
 
+    /**
+     * Delete a report.
+     */
     public function destroy(Report $report): JsonResponse
     {
         $actor = request()->user();

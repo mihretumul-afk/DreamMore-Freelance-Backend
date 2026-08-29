@@ -53,11 +53,6 @@ class Proposal extends Model
         return $this->belongsTo(User::class, 'freelancer_id');
     }
 
-    public function contract(): HasOne
-    {
-        return $this->hasOne(Contract::class);
-    }
-
     public function portfolioItems()
     {
         return $this->belongsToMany(PortfolioItem::class, 'proposal_portfolio_items')

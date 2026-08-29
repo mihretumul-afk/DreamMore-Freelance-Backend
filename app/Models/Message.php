@@ -22,10 +22,6 @@ class Message extends Model
         'read_at' => 'datetime',
     ];
 
-    public function contract(): BelongsTo
-    {
-        return $this->belongsTo(Contract::class);
-    }
 
     public function sender(): BelongsTo
     {

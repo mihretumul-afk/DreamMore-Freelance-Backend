@@ -8,6 +8,7 @@ use App\Http\Resources\Api\V1\ProposalResource;
 use App\Models\Contract;
 use App\Models\Job;
 use App\Models\Proposal;
+use App\Services\AuditService;
 use App\Services\NotificationService;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\JsonResponse;
@@ -297,6 +298,9 @@ class ProposalController extends BaseApiController
         }
 
         if ($proposal->status !== 'pending') {
+            if ($proposal->status === 'accepted') {
+                return $this->sendError('This proposal has already been accepted and hired.', [], 422);
+            }
             return $this->sendError(
                 "Only pending proposals can be shortlisted. Current status: '{$proposal->status}'.",
                 [],
@@ -343,6 +347,10 @@ class ProposalController extends BaseApiController
             return $proposal;
         }
 
+        if ($proposal->status === 'accepted') {
+            return $this->sendError('This proposal has already been accepted and cannot be rejected.', [], 422);
+        }
+
         if (!in_array($proposal->status, self::FREELANCER_EDITABLE_STATUSES, true)) {
             return $this->sendError(
                 "Only pending or shortlisted proposals can be rejected. Current status: '{$proposal->status}'.",
@@ -371,8 +379,7 @@ class ProposalController extends BaseApiController
     }
 
     /**
-     * Employer accepts a proposal: creates the contract, rejects the remaining
-     * active proposals, and marks the job as in progress.
+     * Employer accepts a proposal.
      */
     public function accept(ProposalStatusRequest $request, Job $job, Proposal $proposal): JsonResponse
     {
@@ -391,16 +398,19 @@ class ProposalController extends BaseApiController
             return $proposal;
         }
 
+        if ($proposal->status === 'accepted') {
+            return $this->sendResponse(
+                new ProposalResource($proposal),
+                'This proposal has already been accepted.'
+            );
+        }
+
         if (!in_array($proposal->status, self::FREELANCER_EDITABLE_STATUSES, true)) {
             return $this->sendError(
                 "Only pending or shortlisted proposals can be accepted. Current status: '{$proposal->status}'.",
                 [],
                 422
             );
-        }
-
-        if ($proposal->contract()->exists()) {
-            return $this->sendError('A contract already exists for this proposal.', [], 422);
         }
 
         if ($proposal->freelancer && $proposal->freelancer->role === 'freelancer') {
@@ -410,7 +420,7 @@ class ProposalController extends BaseApiController
             }
         }
 
-        $contract = DB::transaction(function () use ($job, $proposal) {
+        $contract = DB::transaction(function () use ($job, $proposal, $request) {
             $proposal->update(['status' => 'accepted']);
 
             $job->proposals()
@@ -418,43 +428,27 @@ class ProposalController extends BaseApiController
                 ->active()
                 ->update(['status' => 'rejected']);
 
-            $createdContract = Contract::create([
-                'job_id' => $job->id,
-                'proposal_id' => $proposal->id,
-                'employer_id' => $job->employer_id,
-                'freelancer_id' => $proposal->freelancer_id,
-                'title' => $job->title,
-                'budget_type' => $job->budget_type,
-                'agreed_rate' => $proposal->bid_amount,
-                'total_amount' => $proposal->bid_amount,
-                'status' => 'active',
-                'start_date' => now(),
-            ]);
-
             if ($job->status === 'open') {
                 $job->update(['status' => 'in_progress']);
             }
 
-            // Populate contract milestones if proposal has proposed_milestones
-            if (!empty($proposal->proposed_milestones) && is_array($proposal->proposed_milestones)) {
-                foreach ($proposal->proposed_milestones as $m) {
-                    if (!empty($m['title']) && !empty($m['amount'])) {
-                        \App\Models\Milestone::create([
-                            'contract_id' => $createdContract->id,
-                            'title' => $m['title'],
-                            'amount' => $m['amount'],
-                            'due_date' => !empty($m['dueDate']) ? $m['dueDate'] : null,
-                            'description' => $m['description'] ?? null,
-                            'status' => \App\Models\Milestone::STATUS_AWAITING_FUNDING,
-                        ]);
-                    }
-                }
-            }
+            // Auto-create contract
+            $contract = Contract::create([
+                'job_id'        => $job->id,
+                'proposal_id'   => $proposal->id,
+                'employer_id'   => $job->employer_id,
+                'freelancer_id' => $proposal->freelancer_id,
+                'title'         => $job->title,
+                'budget_type'   => $job->budget_type ?? 'fixed',
+                'agreed_rate'   => $proposal->bid_amount,
+                'total_amount'  => $proposal->bid_amount,
+                'status'        => Contract::STATUS_PENDING,
+            ]);
 
-            return $createdContract;
+            return $contract;
         });
 
-        // Notify the freelancer about acceptance
+        // Notify freelancer about proposal acceptance + contract
         NotificationService::proposalStatusChanged(
             $proposal->freelancer_id,
             'accepted',
@@ -462,25 +456,27 @@ class ProposalController extends BaseApiController
             $job->id
         );
 
-        // Notify about contract creation to both parties
         NotificationService::contractCreated(
             $proposal->freelancer_id,
             $job->title,
-            'freelancer'
+            'freelancer',
+            $contract->id
         );
 
-        NotificationService::contractCreated(
-            $job->employer_id,
-            $job->title,
-            'employer'
+        AuditService::record(
+            $request->user(),
+            'proposal.accepted',
+            'Proposal',
+            $proposal->id,
+            "Accepted proposal #{$proposal->id} for job '{$job->title}'. Contract #{$contract->id} created."
         );
 
-        $proposal->load(['job', 'freelancer', 'contract']);
+        $proposal->load(['job', 'freelancer']);
         $proposal->refresh();
 
         return $this->sendResponse(
             new ProposalResource($proposal),
-            'Proposal accepted. Contract created successfully.'
+            'Proposal accepted successfully. Contract created.'
         );
     }
 

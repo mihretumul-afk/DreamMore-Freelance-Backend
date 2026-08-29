@@ -2,12 +2,25 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class PaymentMethod extends Model
 {
+    use HasFactory;
+
+    // ── Type constants ────────────────────────────────────────────────────
+    public const TYPE_CARD        = 'card';
+    public const TYPE_BANK        = 'bank';
+    public const TYPE_MOBILE_MONEY = 'mobile_money';
+
+    // ── Provider constants ────────────────────────────────────────────────
+    public const PROVIDER_TELEBIRR = 'telebirr';
+    public const PROVIDER_CBE      = 'cbe';
+    public const PROVIDER_STRIPE   = 'stripe';
+    public const PROVIDER_SANDBOX  = 'sandbox';
+
     protected $fillable = [
         'user_id',
         'type',
@@ -15,6 +28,7 @@ class PaymentMethod extends Model
         'provider',
         'provider_token',
         'masked_identifier',
+        'label',
         'display_label',
         'card_brand',
         'card_last_four',
@@ -31,72 +45,40 @@ class PaymentMethod extends Model
         'metadata',
     ];
 
-    protected function casts(): array
-    {
-        return [
-            'is_default'  => 'boolean',
-            'is_verified' => 'boolean',
-            'metadata'    => 'array',
-        ];
-    }
-
-    // ── Type constants ───────────────────────────────────────────────────
-    public const TYPE_CARD         = 'card';
-    public const TYPE_BANK_ACCOUNT = 'bank_account';
-    public const TYPE_MOBILE_MONEY = 'mobile_money';
-
-    public const TYPES = [
-        self::TYPE_CARD,
-        self::TYPE_BANK_ACCOUNT,
-        self::TYPE_MOBILE_MONEY,
+    protected $casts = [
+        'is_default' => 'boolean',
+        'is_verified' => 'boolean',
+        'metadata'   => 'array',
     ];
-
-    // ── Relationships ────────────────────────────────────────────────────
 
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }
 
-    public function payments(): HasMany
+    /**
+     * Set this as the default, unset others.
+     */
+    public function setAsDefault(): void
     {
-        return $this->hasMany(Payment::class);
+        $this->user->paymentMethods()->where('id', '!=', $this->id)->update(['is_default' => false]);
+        $this->update(['is_default' => true]);
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────
-
     /**
-     * A safe display label for the UI.
-     * Never exposes full card/account numbers.
+     * Get display label for the method.
      */
-    public function getDisplayLabel(): string
+    public function getDisplayLabelAttribute(): string
     {
-        if ($this->display_label) {
-            return $this->display_label;
+        if (!empty($this->attributes['display_label'])) {
+            return (string) $this->attributes['display_label'];
         }
 
         return match ($this->type) {
-            self::TYPE_CARD => trim(($this->card_brand ?? 'Card') . ' ending in ' . ($this->card_last_four ?? '****')),
-            self::TYPE_BANK_ACCOUNT => trim(($this->bank_name ?? 'Bank') . ' ' . ($this->masked_account_number ?? '')),
-            self::TYPE_MOBILE_MONEY => trim(($this->mobile_provider ?? 'Mobile') . ' ' . ($this->masked_phone ?? '')),
-            default => $this->nickname ?? 'Payment Method',
+            self::TYPE_CARD => ($this->card_brand ? ucfirst((string) $this->card_brand) . ' ' : '') . '••••' . ($this->card_last_four ?? '????'),
+            self::TYPE_BANK => ($this->bank_name ?? 'Bank') . ' ••••' . ($this->masked_account_number ?? '????'),
+            self::TYPE_MOBILE_MONEY => ($this->mobile_provider ?? 'Mobile') . ' •••' . (substr((string) ($this->masked_phone ?? ''), -4) ?: '????'),
+            default => (string) ($this->nickname ?? 'Payment Method'),
         };
-    }
-
-    // ── Scopes ───────────────────────────────────────────────────────────
-
-    public function scopeDefault($query)
-    {
-        return $query->where('is_default', true);
-    }
-
-    public function scopeVerified($query)
-    {
-        return $query->where('is_verified', true);
-    }
-
-    public function scopeForUser($query, int $userId)
-    {
-        return $query->where('user_id', $userId);
     }
 }

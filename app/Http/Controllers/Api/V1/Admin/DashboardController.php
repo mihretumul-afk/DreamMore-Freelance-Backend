@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Api\V1\BaseApiController;
 use App\Models\Category;
-use App\Models\Contract;
 use App\Models\Job;
 use App\Models\Proposal;
 use App\Models\Report;
@@ -32,12 +31,12 @@ class DashboardController extends BaseApiController
         $openJobs = Job::where('status', 'open')->count();
         $completedJobs = Job::where('status', 'completed')->count();
 
-        // Proposal & Contract metrics
+        // Proposal metrics
         $totalProposals = Proposal::count();
-        $totalContracts = Contract::count();
-        $activeContracts = Contract::whereIn('status', ['active', 'paused'])->count();
-        $completedContracts = Contract::where('status', 'completed')->count();
-        $totalRevenue = Contract::where('status', 'completed')->sum('total_amount');
+        $totalContracts = 0;
+        $activeContracts = 0;
+        $completedContracts = 0;
+        $totalRevenue = 0;
 
         // Platform catalog & moderation metrics
         $totalCategories = Category::count();

@@ -41,6 +41,7 @@ class AuditLog extends Model
     public const MODULE_SETTINGS      = 'settings';
     public const MODULE_PAYMENTS      = 'payments';
     public const MODULE_MILESTONES    = 'milestones';
+    public const MODULE_CONTRACTS     = 'contracts';
 
     // ── Action constants — Admins ────────────────────────────────────────
 

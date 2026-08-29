@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Laravel\Sanctum\Sanctum;
 
 class JobController extends BaseApiController
 {
@@ -105,7 +106,11 @@ class JobController extends BaseApiController
         $isPubliclyAvailable = $job->status === 'open' && $job->employer && $job->employer->status === 'active';
 
         if (! $isPubliclyAvailable) {
+            // Try to resolve the authenticated user from Bearer token even on this public route
             $user = $request->user();
+            if (!$user && $request->bearerToken()) {
+                $user = Sanctum::actingAs() ?? $request->user();
+            }
 
             if (!$user || ($user->id !== $job->employer_id && $user->role !== 'admin')) {
                 return $this->sendError('Job not found.', [], 404);

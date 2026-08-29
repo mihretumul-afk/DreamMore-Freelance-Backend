@@ -32,25 +32,17 @@ class Permission extends Model
     public const JOBS_DELETE   = 'jobs.delete';
     public const JOBS_MODERATE = 'jobs.moderate';
 
-    // Payments
-    public const PAYMENTS_VIEW    = 'payments.view';
-    public const PAYMENTS_VERIFY  = 'payments.verify';
-    public const PAYMENTS_PROCESS = 'payments.process';
-    public const PAYMENTS_REFUND  = 'payments.refund';
-
-    // Milestones
-    public const MILESTONES_VIEW    = 'milestones.view';
-    public const MILESTONES_CREATE  = 'milestones.create';
+    // Financial
+    public const PAYMENTS_VIEW      = 'payments.view';
+    public const PAYMENTS_PROCESS   = 'payments.process';
+    public const PAYMENTS_REFUND    = 'payments.refund';
     public const MILESTONES_FUND    = 'milestones.fund';
     public const MILESTONES_RELEASE = 'milestones.release';
-
-    // Transactions
-    public const TRANSACTIONS_VIEW   = 'transactions.view';
-    public const TRANSACTIONS_EXPORT = 'transactions.export';
-
-    // Withdrawals
+    public const TRANSACTIONS_VIEW  = 'transactions.view';
     public const WITHDRAWALS_VIEW   = 'withdrawals.view';
     public const WITHDRAWALS_MANAGE = 'withdrawals.manage';
+    public const FINANCE_VIEW       = 'finance.view';
+    public const FINANCE_MANAGE     = 'finance.manage';
 
     // Disputes
     public const DISPUTES_VIEW     = 'disputes.view';

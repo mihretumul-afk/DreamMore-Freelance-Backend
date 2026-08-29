@@ -60,6 +60,32 @@ class AuditService
         ]);
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // GENERIC record helper
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Generic audit log entry for any action.
+     */
+    public static function record(
+        $actor,
+        string $action,
+        string $subjectType,
+        ?int $subjectId,
+        ?string $description = null,
+    ): AuditLog {
+        $actorId = is_int($actor) ? $actor : ($actor?->id);
+        return self::log(
+            $action,
+            AuditLog::MODULE_CONTRACTS,
+            $subjectType,
+            $subjectId,
+            [],
+            $actorId,
+            $description,
+        );
+    }
+
     // ── Internal helper: build actor label ───────────────────────────────
 
     private static function actorLabel(?int $actorId): string

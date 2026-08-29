@@ -2,7 +2,6 @@
 
 namespace App\Http\Resources;
 
-use App\Models\Contract;
 use App\Models\Credential;
 use App\Models\PortfolioItem;
 use App\Models\Review;
@@ -22,16 +21,9 @@ class FreelancerProfileResource extends JsonResource
         $isOwnProfile = $request->user() && $request->user()->id === $this->user_id;
         $isAdmin = $request->user() && $request->user()->role === 'admin';
 
-        $completedContracts = Contract::where('freelancer_id', $this->user_id)
-            ->where('status', 'completed')
-            ->count();
-        $endedContracts = Contract::where('freelancer_id', $this->user_id)
-            ->whereIn('status', ['completed', 'cancelled', 'disputed'])
-            ->count();
-
-        $successRate = $endedContracts > 0
-            ? (int) round(($completedContracts / $endedContracts) * 100)
-            : null;
+        $completedContracts = 0;
+        $endedContracts = 0;
+        $successRate = null;
 
         $verification = Verification::where('user_id', $this->user_id)
             ->orderByDesc('created_at')
@@ -112,7 +104,7 @@ class FreelancerProfileResource extends JsonResource
                 : null,
             // Recent reviews (public, no sensitive data)
             'reviews' => Review::where('reviewee_id', $this->user_id)
-                ->with(['reviewer:id,name,avatar', 'contract:id,title'])
+                ->with(['reviewer:id,name,avatar'])
                 ->orderByDesc('created_at')
                 ->limit(5)
                 ->get()
@@ -121,10 +113,10 @@ class FreelancerProfileResource extends JsonResource
                         'id' => $review->id,
                         'rating' => $review->rating,
                         'comment' => $review->comment,
-                        'reviewer_name' => $review->reviewer->name,
-                        'reviewer_avatar' => $review->reviewer->avatar,
-                        'contract_title' => $review->contract->title,
-                        'created_at' => $review->created_at->toISOString(),
+                        'reviewer_name' => $review->reviewer?->name ?? 'User',
+                        'reviewer_avatar' => $review->reviewer?->avatar,
+                        'contract_title' => 'Project',
+                        'created_at' => $review->created_at?->toISOString(),
                     ];
                 }),
             'created_at' => $this->created_at?->toISOString(),

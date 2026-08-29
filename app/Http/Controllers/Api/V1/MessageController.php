@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Events\MessageRead;
 use App\Events\MessageSent;
-use App\Models\Contract;
 use App\Models\Message;
 use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
@@ -139,16 +138,7 @@ class MessageController extends BaseApiController
             'contract_id' => 'nullable|integer|exists:contracts,id',
         ]);
 
-        $contractId = $validated['contract_id'] ?? null;
-
-        if (!$contractId) {
-            // Auto-find any contract between these users if one exists
-            $contractId = Contract::where(function ($query) use ($user, $validated) {
-                $query->where('employer_id', $user->id)->where('freelancer_id', $validated['receiver_id']);
-            })->orWhere(function ($query) use ($user, $validated) {
-                $query->where('employer_id', $validated['receiver_id'])->where('freelancer_id', $user->id);
-            })->value('id');
-        }
+        $contractId = null;
 
         $message = Message::create([
             'contract_id' => $contractId,
@@ -190,7 +180,11 @@ class MessageController extends BaseApiController
             $message->update(['read_at' => now()]);
 
             // Broadcast read receipt
-            broadcast(new MessageRead($message->fresh()));
+            try {
+                broadcast(new MessageRead($message->fresh()));
+            } catch (\Throwable $e) {
+                // WebSocket non-critical fallback
+            }
         }
 
         return $this->sendResponse($message->fresh(), 'Message marked as read.');

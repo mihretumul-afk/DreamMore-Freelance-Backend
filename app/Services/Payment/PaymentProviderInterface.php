@@ -2,54 +2,63 @@
 
 namespace App\Services\Payment;
 
-use App\Models\Payment;
-
 /**
- * PaymentProviderInterface
- *
- * Every payment gateway adapter must implement this contract.
- * The PaymentService routes calls through this interface, so swapping
- * providers (Manual → Chapa → Stripe) requires only a new adapter class
- * and a config change — no controller or service changes.
+ * PaymentProviderInterface — provider-agnostic contract for payment processing.
+ * All payment adapters must implement this interface.
  */
 interface PaymentProviderInterface
 {
     /**
-     * Unique slug identifying this provider (e.g. 'manual', 'chapa').
+     * Initialize a payment charge.
+     *
+     * @param float  $amount       Amount to charge
+     * @param string $currency     Currency code (e.g. ETB)
+     * @param string $reference    Unique payment reference
+     * @param array  $metadata     Additional metadata (user_id, milestone_id, etc.)
+     * @return array{success: bool, provider_reference: string|null, error: string|null}
      */
-    public function getSlug(): string;
+    public function charge(float $amount, string $currency, string $reference, array $metadata = []): array;
 
     /**
-     * Human-readable provider name shown in the UI.
+     * Process a refund.
+     *
+     * @param string $providerReference Original provider transaction reference
+     * @param float  $amount            Refund amount
+     * @param string $reason            Refund reason
+     * @return array{success: bool, provider_reference: string|null, error: string|null}
+     */
+    public function refund(string $providerReference, float $amount, string $reason = ''): array;
+
+    /**
+     * Verify a payment by provider reference.
+     *
+     * @param string $providerReference Provider transaction ID
+     * @return array{status: string, amount: float|null, error: string|null}
+     */
+    public function verify(string $providerReference): array;
+
+    /**
+     * Verify webhook signature.
+     *
+     * @param string $payload    Raw request body
+     * @param string $signature  Signature from headers
+     * @return bool
+     */
+    public function verifyWebhookSignature(string $payload, string $signature): bool;
+
+    /**
+     * Process a payout/withdrawal.
+     *
+     * @param float  $amount    Amount to send
+     * @param string $currency  Currency code
+     * @param string $reference Unique withdrawal reference
+     * @param array  $recipient Recipient details (account, mobile, etc.)
+     * @return array{success: bool, provider_reference: string|null, error: string|null}
+     */
+    public function payout(float $amount, string $currency, string $reference, array $recipient = []): array;
+
+    /**
+     * Get provider name.
      */
     public function getName(): string;
-
-    /**
-     * Whether this provider is available in the current environment.
-     */
-    public function isAvailable(): bool;
-
-    /**
-     * Initiate a payment.
-     *
-     * Returns a ProviderResult with:
-     *   success     bool
-     *   reference   string|null   — gateway's own transaction ID
-     *   redirect_url string|null  — for redirect-based flows (Chapa, etc.)
-     *   message     string
-     *   raw         array         — full gateway response for audit storage
-     */
-    public function charge(Payment $payment, array $options = []): ProviderResult;
-
-    /**
-     * Verify the current status of a payment with the gateway.
-     */
-    public function verify(Payment $payment): ProviderResult;
-
-    /**
-     * Issue a full or partial refund.
-     *
-     * @param  float|null  $amount  Partial amount; null = full refund
-     */
-    public function refund(Payment $payment, ?float $amount = null, string $reason = ''): ProviderResult;
 }

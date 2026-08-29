@@ -11,14 +11,13 @@ class Contract extends Model
 {
     use HasFactory;
 
-    // Status constants
-    const STATUS_DRAFT     = 'draft';
-    const STATUS_PENDING   = 'pending';
-    const STATUS_ACTIVE    = 'active';
-    const STATUS_PAUSED    = 'paused';
-    const STATUS_COMPLETED = 'completed';
-    const STATUS_CANCELLED = 'cancelled';
-    const STATUS_DISPUTED  = 'disputed';
+    // ── Status constants ──────────────────────────────────────────────────
+    public const STATUS_PENDING = 'pending_acceptance';
+    public const STATUS_ACTIVE  = 'active';
+    public const STATUS_COMPLETED = 'completed';
+    public const STATUS_PAUSED  = 'paused';
+    public const STATUS_CANCELLED = 'cancelled';
+    public const STATUS_DISPUTED = 'disputed';
 
     protected $fillable = [
         'job_id',
@@ -26,28 +25,28 @@ class Contract extends Model
         'employer_id',
         'freelancer_id',
         'title',
-        'contract_type',
         'budget_type',
         'agreed_rate',
         'total_amount',
-        'currency',
         'status',
+        'terms',
         'start_date',
         'end_date',
     ];
 
     protected $casts = [
-        'agreed_rate' => 'decimal:2',
+        'agreed_rate'  => 'decimal:2',
         'total_amount' => 'decimal:2',
-        'start_date' => 'datetime',
-        'end_date' => 'datetime',
+        'start_date'   => 'datetime',
+        'end_date'     => 'datetime',
     ];
 
     protected $attributes = [
-        'currency' => 'ETB',
-        'contract_type' => 'fixed',
-        'status' => 'pending',
+        'budget_type' => 'fixed',
+        'status'      => self::STATUS_PENDING,
     ];
+
+    // ── Relationships ─────────────────────────────────────────────────────
 
     public function job(): BelongsTo
     {
@@ -71,26 +70,28 @@ class Contract extends Model
 
     public function milestones(): HasMany
     {
-        return $this->hasMany(Milestone::class)->orderBy('sort_order');
+        return $this->hasMany(Milestone::class)->orderBy('created_at');
     }
 
-    public function escrowTransactions(): HasMany
+    // ── Helper methods ────────────────────────────────────────────────────
+
+    public function isPending(): bool
     {
-        return $this->hasMany(EscrowTransaction::class);
+        return $this->status === self::STATUS_PENDING;
     }
 
-    public function disputes(): HasMany
+    public function isActive(): bool
     {
-        return $this->hasMany(Dispute::class);
+        return $this->status === self::STATUS_ACTIVE;
     }
 
-    public function messages(): HasMany
+    public function isCompleted(): bool
     {
-        return $this->hasMany(Message::class);
+        return $this->status === self::STATUS_COMPLETED;
     }
 
-    public function reviews(): HasMany
+    public function isDisputed(): bool
     {
-        return $this->hasMany(Review::class);
+        return $this->status === self::STATUS_DISPUTED;
     }
 }

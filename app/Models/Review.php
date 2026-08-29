@@ -23,10 +23,6 @@ class Review extends Model
         'rating' => 'integer',
     ];
 
-    public function contract(): BelongsTo
-    {
-        return $this->belongsTo(Contract::class);
-    }
 
     public function reviewer(): BelongsTo
     {

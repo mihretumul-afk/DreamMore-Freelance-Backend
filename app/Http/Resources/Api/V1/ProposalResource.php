@@ -65,19 +65,6 @@ class ProposalResource extends JsonResource
                     ];
                 });
             }),
-            'contract' => $this->whenLoaded('contract', function () {
-                return $this->contract ? [
-                    'id' => $this->contract->id,
-                    'title' => $this->contract->title,
-                    'status' => $this->contract->status,
-                    'budget_type' => $this->contract->budget_type,
-                    'agreed_rate' => (float) $this->contract->agreed_rate,
-                    'total_amount' => (float) $this->contract->total_amount,
-                    'start_date' => $this->contract->start_date?->toIso8601String(),
-                    'end_date' => $this->contract->end_date?->toIso8601String(),
-                    'created_at' => $this->contract->created_at?->toIso8601String(),
-                ] : null;
-            }),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

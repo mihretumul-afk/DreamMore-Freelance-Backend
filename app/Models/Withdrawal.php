@@ -2,11 +2,22 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Withdrawal extends Model
 {
+    use HasFactory;
+
+    // ── Status constants ──────────────────────────────────────────────────
+    public const STATUS_REQUESTED  = 'requested';
+    public const STATUS_PROCESSING = 'processing';
+    public const STATUS_COMPLETED  = 'completed';
+    public const STATUS_FAILED     = 'failed';
+    public const STATUS_CANCELLED  = 'cancelled';
+    public const STATUS_REJECTED   = 'rejected';
+
     protected $fillable = [
         'reference',
         'user_id',
@@ -28,56 +39,21 @@ class Withdrawal extends Model
         'rejection_reason',
     ];
 
-    protected function casts(): array
-    {
-        return [
-            'amount'            => 'decimal:2',
-            'fee'               => 'decimal:2',
-            'net_amount'        => 'decimal:2',
-            'provider_response' => 'array',
-            'processed_at'      => 'datetime',
-            'completed_at'      => 'datetime',
-            'rejected_at'       => 'datetime',
-        ];
-    }
-
-    // ── Status constants ─────────────────────────────────────────────
-
-    public const STATUS_REQUESTED  = 'requested';
-    public const STATUS_PROCESSING = 'processing';
-    public const STATUS_COMPLETED  = 'completed';
-    public const STATUS_FAILED     = 'failed';
-    public const STATUS_CANCELLED  = 'cancelled';
-    public const STATUS_REJECTED   = 'rejected';
-
-    public const STATUSES = [
-        self::STATUS_REQUESTED,
-        self::STATUS_PROCESSING,
-        self::STATUS_COMPLETED,
-        self::STATUS_FAILED,
-        self::STATUS_CANCELLED,
-        self::STATUS_REJECTED,
+    protected $casts = [
+        'amount'       => 'decimal:2',
+        'fee'          => 'decimal:2',
+        'net_amount'   => 'decimal:2',
+        'processed_at' => 'datetime',
+        'completed_at' => 'datetime',
+        'rejected_at'  => 'datetime',
     ];
 
-    // ── Boot ─────────────────────────────────────────────────────────
+    protected $attributes = [
+        'currency' => 'ETB',
+        'status'   => self::STATUS_REQUESTED,
+    ];
 
-    protected static function booted(): void
-    {
-        static::creating(function (Withdrawal $w) {
-            if (empty($w->reference)) {
-                $w->reference = self::generateReference();
-            }
-        });
-    }
-
-    public static function generateReference(): string
-    {
-        $year = now()->year;
-        $seq  = str_pad((string) (self::whereYear('created_at', $year)->count() + 1), 6, '0', STR_PAD_LEFT);
-        return "WTH-{$year}-{$seq}";
-    }
-
-    // ── Relationships ────────────────────────────────────────────────
+    // ── Relationships ─────────────────────────────────────────────────────
 
     public function user(): BelongsTo
     {
@@ -89,25 +65,13 @@ class Withdrawal extends Model
         return $this->belongsTo(PaymentMethod::class);
     }
 
-    public function processor(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'processed_by');
-    }
+    // ── Helpers ───────────────────────────────────────────────────────────
 
-    // ── Scopes ───────────────────────────────────────────────────────
-
-    public function scopeForUser($query, int $userId)
+    /**
+     * Generate a unique withdrawal reference.
+     */
+    public static function generateReference(): string
     {
-        return $query->where('user_id', $userId);
-    }
-
-    public function scopePending($query)
-    {
-        return $query->whereIn('status', [self::STATUS_REQUESTED, self::STATUS_PROCESSING]);
-    }
-
-    public function scopeCompleted($query)
-    {
-        return $query->where('status', self::STATUS_COMPLETED);
+        return 'WDR-' . strtoupper(uniqid());
     }
 }

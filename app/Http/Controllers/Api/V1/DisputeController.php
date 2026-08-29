@@ -2,150 +2,210 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Http\Controllers\Api\V1\Admin\ReportController;
 use App\Models\Contract;
-use App\Models\Dispute;
 use App\Models\Milestone;
+use App\Models\Report;
 use App\Services\NotificationService;
-use App\Services\WalletService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class DisputeController extends BaseApiController
 {
-    protected WalletService $walletService;
-
-    public function __construct(WalletService $walletService)
-    {
-        $this->walletService = $walletService;
-    }
-
     /**
-     * User raises a dispute on a contract / milestone. Freezes the milestone.
-     */
-    public function store(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'contract_id' => 'required|exists:contracts,id',
-            'milestone_id' => 'nullable|exists:milestones,id',
-            'reason' => 'required|string|min:5|max:2000',
-        ]);
-
-        $user = $request->user();
-        $contract = Contract::findOrFail($validated['contract_id']);
-
-        if ($contract->employer_id !== $user->id && $contract->freelancer_id !== $user->id && $user->role !== 'admin') {
-            return $this->sendForbidden('You do not have permission to dispute this contract.');
-        }
-
-        $milestone = null;
-        if (!empty($validated['milestone_id'])) {
-            $milestone = Milestone::where('contract_id', $contract->id)
-                ->where('id', $validated['milestone_id'])
-                ->firstOrFail();
-        }
-
-        $dispute = DB::transaction(function () use ($contract, $milestone, $user, $validated) {
-            if ($milestone) {
-                $milestone->update(['status' => 'disputed']);
-            }
-            $contract->update(['status' => 'disputed']);
-
-            return Dispute::create([
-                'contract_id' => $contract->id,
-                'milestone_id' => $milestone?->id,
-                'raised_by' => $user->id,
-                'reason' => $validated['reason'],
-                'status' => 'open',
-            ]);
-        });
-
-        // Notify admins
-        NotificationService::notifyAdmins(
-            'admin_dispute_created',
-            'New Escrow Dispute Raised',
-            "Dispute raised by {$user->name} on contract '{$contract->title}'.",
-            '/admin/reports'
-        );
-
-        return $this->sendResponse($dispute->load(['contract', 'milestone', 'raisedBy']), 'Dispute raised successfully. Milestone frozen pending admin resolution.', 201);
-    }
-
-    /**
-     * Admin lists all disputes.
+     * List all disputes relevant to the authenticated user.
      */
     public function index(Request $request): JsonResponse
     {
-        if ($request->user()->role !== 'admin') {
-            return $this->sendForbidden('Only administrators can view all disputes.');
+        $user = $request->user();
+
+        // Get contracts and milestones belonging to the user
+        $contractIds = Contract::where('employer_id', $user->id)
+            ->orWhere('freelancer_id', $user->id)
+            ->pluck('id');
+
+        $milestoneIds = Milestone::whereIn('contract_id', $contractIds)->pluck('id');
+
+        $query = Report::with('reporter')
+            ->where(function ($q) use ($user, $contractIds, $milestoneIds) {
+                $q->where('reporter_id', $user->id)
+                  ->orWhere(function ($subQ) use ($milestoneIds) {
+                      $subQ->where('target_type', 'milestone')
+                           ->whereIn('target_id', $milestoneIds);
+                  })
+                  ->orWhere(function ($subQ) use ($contractIds) {
+                      $subQ->where('target_type', 'contract')
+                           ->whereIn('target_id', $contractIds);
+                  });
+            });
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->input('status'));
         }
 
-        $disputes = Dispute::with(['contract', 'milestone', 'raisedBy', 'resolvedBy'])
-            ->orderByDesc('created_at')
-            ->paginate(20);
+        $reports = $query->orderByDesc('created_at')->paginate(15);
 
-        return $this->sendResponse($disputes->items(), 'Disputes retrieved successfully.', 200, [
-            'current_page' => $disputes->currentPage(),
-            'last_page' => $disputes->lastPage(),
-            'per_page' => $disputes->perPage(),
-            'total' => $disputes->total(),
-        ]);
+        // Transform collection to include parsed notes filtered for user role
+        $items = collect($reports->items())->map(function ($report) use ($user) {
+            $data = $report->toArray();
+            $data['notes_list'] = $this->filterNotesForUser($report->admin_notes, $user);
+
+            if ($report->target_type === 'milestone') {
+                $milestone = Milestone::with(['contract.employer', 'contract.freelancer'])->find($report->target_id);
+                if ($milestone) {
+                    $data['milestone'] = $milestone->toArray();
+                    $data['contract']  = $milestone->contract ? $milestone->contract->toArray() : null;
+                }
+            } elseif ($report->target_type === 'contract') {
+                $contract = Contract::with(['employer', 'freelancer'])->find($report->target_id);
+                if ($contract) {
+                    $data['contract'] = $contract->toArray();
+                }
+            }
+
+            return $data;
+        });
+
+        return $this->sendResponse(
+            $items,
+            'Disputes retrieved successfully.',
+            200,
+            [
+                'current_page' => $reports->currentPage(),
+                'last_page'    => $reports->lastPage(),
+                'per_page'     => $reports->perPage(),
+                'total'        => $reports->total(),
+            ]
+        );
     }
 
     /**
-     * Admin resolves a dispute (release to freelancer, or refund to employer).
+     * Show a single dispute details for the user.
      */
-    public function resolve(Request $request, Dispute $dispute): JsonResponse
+    public function show(Request $request, Report $report): JsonResponse
     {
-        if ($request->user()->role !== 'admin') {
-            return $this->sendForbidden('Only administrators can resolve disputes.');
+        $user = $request->user();
+
+        if (!$this->userCanAccessReport($user, $report)) {
+            return $this->sendForbidden('You do not have access to this dispute.');
         }
 
-        $validated = $request->validate([
-            'resolution' => 'required|string|in:resolved_release,resolved_refund',
-            'resolution_note' => 'required|string|min:5|max:2000',
+        $report->load('reporter');
+        $data = $report->toArray();
+
+        $data['notes_list'] = $this->filterNotesForUser($report->admin_notes, $user);
+
+        if ($report->target_type === 'milestone') {
+            $milestone = Milestone::with(['contract.employer', 'contract.freelancer', 'submissions' => fn ($q) => $q->latest()])->find($report->target_id);
+            if ($milestone) {
+                $data['milestone'] = $milestone->toArray();
+                $data['contract']  = $milestone->contract ? $milestone->contract->toArray() : null;
+            }
+        } elseif ($report->target_type === 'contract') {
+            $contract = Contract::with(['employer', 'freelancer'])->find($report->target_id);
+            if ($contract) {
+                $data['contract'] = $contract->toArray();
+            }
+        }
+
+        return $this->sendResponse($data, 'Dispute retrieved successfully.');
+    }
+
+    /**
+     * User (Freelancer or Employer) adds a note/reply to the dispute.
+     */
+    public function addNote(Request $request, Report $report): JsonResponse
+    {
+        $user = $request->user();
+
+        if (!$this->userCanAccessReport($user, $report)) {
+            return $this->sendForbidden('You do not have access to this dispute.');
+        }
+
+        $request->validate([
+            'note' => 'required|string|max:5000',
         ]);
 
-        $admin = $request->user();
-        $milestone = $dispute->milestone;
+        $noteText  = $request->input('note');
+        $notesList = ReportController::parseNotes($report->admin_notes);
 
-        try {
-            DB::transaction(function () use ($dispute, $milestone, $admin, $validated) {
-                if ($validated['resolution'] === 'resolved_release') {
-                    if ($milestone) {
-                        // Force milestone to submitted so releaseMilestone can process it
-                        $milestone->status = 'submitted';
-                        $milestone->save();
+        $notesList[] = [
+            'id'             => (string) Str::uuid(),
+            'sender_id'       => $user->id,
+            'sender_name'     => $user->name,
+            'sender_role'     => $user->role,
+            'recipient_type' => $user->role,
+            'note'           => $noteText,
+            'created_at'     => now()->toIso8601String(),
+        ];
 
-                        $this->walletService->releaseMilestone($milestone, $admin);
-                    }
-                    $dispute->status = 'resolved_release';
-                } else {
-                    if ($milestone) {
-                        $this->walletService->refundMilestone($milestone);
-                    }
-                    $dispute->status = 'resolved_refund';
-                }
+        $report->update(['admin_notes' => json_encode($notesList)]);
 
-                $dispute->resolved_by = $admin->id;
-                $dispute->resolution_note = $validated['resolution_note'];
-                $dispute->resolved_at = now();
-                $dispute->save();
+        // Notify Admins only (user communicates directly with admin mediation)
+        NotificationService::notifyAdmins(
+            'dispute_update',
+            'Dispute Reply Received',
+            "{$user->name} ({$user->role}) added a note on dispute #{$report->id}.",
+            "/admin/reports/{$report->id}"
+        );
 
-                // Unfreeze contract status if no other active disputes
-                $otherOpenDisputes = Dispute::where('contract_id', $dispute->contract_id)
-                    ->where('id', '!=', $dispute->id)
-                    ->where('status', 'open')
-                    ->exists();
+        $responseData = $report->fresh()->load('reporter')->toArray();
+        $responseData['notes_list'] = $this->filterNotesForUser(json_encode($notesList), $user);
 
-                if (!$otherOpenDisputes) {
-                    $dispute->contract->update(['status' => 'active']);
-                }
-            });
+        return $this->sendResponse($responseData, 'Note added successfully.');
+    }
 
-            return $this->sendResponse($dispute->fresh(['contract', 'milestone', 'resolvedBy']), 'Dispute resolved successfully.');
-        } catch (\Exception $e) {
-            return $this->sendError('Failed to resolve dispute: ' . $e->getMessage(), [], 422);
+    /**
+     * Check if user is authorized to access the report.
+     */
+    private function userCanAccessReport($user, Report $report): bool
+    {
+        if ($user->role === 'admin' || $report->reporter_id === $user->id) {
+            return true;
         }
+
+        if ($report->target_type === 'milestone') {
+            $milestone = Milestone::with('contract')->find($report->target_id);
+            if ($milestone && $milestone->contract) {
+                return $milestone->contract->employer_id === $user->id || $milestone->contract->freelancer_id === $user->id;
+            }
+        } elseif ($report->target_type === 'contract') {
+            $contract = Contract::find($report->target_id);
+            if ($contract) {
+                return $contract->employer_id === $user->id || $contract->freelancer_id === $user->id;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Filter notes so users only see notes intended for them or sent by them.
+     */
+    private function filterNotesForUser(?string $rawNotes, $user): array
+    {
+        $allNotes = ReportController::parseNotes($rawNotes);
+
+        if ($user->role === 'admin') {
+            return $allNotes;
+        }
+
+        return array_values(array_filter($allNotes, function ($note) use ($user) {
+            $senderId      = $note['sender_id'] ?? null;
+            $recipientType = $note['recipient_type'] ?? 'both';
+
+            // User's own notes are always visible
+            if ($senderId === $user->id) {
+                return true;
+            }
+
+            // Notes from admin/others targeted to 'both' or specifically to user's role
+            if ($recipientType === 'both' || $recipientType === $user->role) {
+                return true;
+            }
+
+            return false;
+        }));
     }
 }

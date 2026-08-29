@@ -2,130 +2,32 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Events\ContractUpdated;
-use App\Events\MilestoneUpdated;
-use App\Http\Requests\Api\V1\MilestoneRequest;
-use App\Http\Requests\Api\V1\MilestoneRevisionRequest;
-use App\Http\Requests\Api\V1\MilestoneSubmissionRequest;
 use App\Http\Resources\Api\V1\MilestoneResource;
-use App\Http\Resources\Api\V1\MilestoneSubmissionResource;
 use App\Models\Contract;
-use App\Models\EmployerProfile;
-use App\Models\FreelancerProfile;
 use App\Models\Milestone;
-use App\Models\MilestoneAttachment;
 use App\Models\MilestoneSubmission;
-use App\Models\MilestoneSubmissionFile;
-use App\Services\ContractActivityService;
+use App\Services\AuditService;
 use App\Services\NotificationService;
+use App\Services\Payment\PaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
-use Symfony\Component\HttpFoundation\StreamedResponse;
-
-use App\Services\WalletService;
 
 class MilestoneController extends BaseApiController
 {
-    protected WalletService $walletService;
-
-    public function __construct(WalletService $walletService)
-    {
-        $this->walletService = $walletService;
-    }
-
     /**
-     * Employer funds a milestone from available wallet balance into escrow.
-     */
-    public function fund(Request $request, Contract $contract, Milestone $milestone): JsonResponse
-    {
-        $guard = $this->requireEmployer($request);
-        if ($guard) {
-            return $guard;
-        }
-
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
-
-        try {
-            $transaction = $this->walletService->fundMilestone($milestone, $request->user());
-
-            NotificationService::milestoneFunded(
-                $contract->freelancer_id,
-                $milestone->title,
-                $milestone->amount,
-                $contract->title,
-                $contract->id
-            );
-
-            $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
-
-            // Broadcast real-time update
-            broadcast(new MilestoneUpdated($milestone, 'funded', [
-                'action' => 'milestone_funded',
-                'amount' => $milestone->amount,
-            ]));
-
-            // Log activity
-            ContractActivityService::milestoneFunded($milestone, $request->user()->id);
-
-            return $this->sendResponse([
-                'milestone' => new MilestoneResource($milestone->fresh()),
-                'transaction' => $transaction,
-            ], 'Milestone funded into escrow successfully.');
-        } catch (\Exception $e) {
-            return $this->sendError($e->getMessage(), [], 422);
-        }
-    }
-
-    /**
-     * Milestone statuses the employer may still edit.
-     */
-    private const EDITABLE_STATUSES = [
-        Milestone::STATUS_AWAITING_FUNDING,
-        Milestone::STATUS_IN_PROGRESS,
-        Milestone::STATUS_REVISION_REQUESTED,
-    ];
-
-    /**
-     * Milestone statuses a freelancer may submit from.
-     * NOTE: awaiting_funding and funded are NOT here — freelancer must start work first.
-     */
-    private const SUBMITTABLE_STATUSES = [
-        Milestone::STATUS_IN_PROGRESS,
-        Milestone::STATUS_REVISION_REQUESTED,
-    ];
-
-    /**
-     * Milestone statuses that block funding or release.
-     */
-    private const PAYMENT_BLOCKED_STATUSES = [
-        Milestone::STATUS_DISPUTED,
-        Milestone::STATUS_PAID,
-        Milestone::STATUS_RELEASED,
-    ];
-
-    /**
-     * List milestones for a contract the user belongs to.
+     * List milestones for a contract.
      */
     public function index(Request $request, Contract $contract): JsonResponse
     {
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
+        $user = $request->user();
+
+        if ($contract->employer_id !== $user->id && $contract->freelancer_id !== $user->id && $user->role !== 'admin') {
+            return $this->sendForbidden('You do not have access to this contract.');
         }
 
         $milestones = $contract->milestones()
-            ->with(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer'])
+            ->with(['creator', 'submissions' => fn ($q) => $q->latest()])
             ->orderBy('created_at')
             ->get();
 
@@ -136,85 +38,21 @@ class MilestoneController extends BaseApiController
     }
 
     /**
-     * Employer creates a milestone on an active contract.
-     * Status defaults to 'awaiting_funding'.
+     * Show a single milestone.
      */
-    public function store(MilestoneRequest $request, Contract $contract): JsonResponse
-    {
-        $guard = $this->requireEmployer($request);
-        if ($guard) {
-            return $guard;
-        }
-
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        if (!in_array($contract->status, ['active', 'pending', 'paused'], true)) {
-            return $this->sendError('Milestones can only be created on active or pending contracts.', [], 422);
-        }
-
-        $validated = $request->validated();
-        $attachments = $request->file('attachments');
-
-        $milestone = DB::transaction(function () use ($contract, $validated, $attachments, $request) {
-            $milestone = $contract->milestones()->create([
-                'title' => $validated['title'],
-                'description' => $validated['description'] ?? null,
-                'amount' => $validated['amount'],
-                'due_date' => $validated['due_date'] ?? null,
-                'status' => Milestone::STATUS_AWAITING_FUNDING,
-            ]);
-
-            // Handle file attachments
-            if ($attachments && count($attachments) > 0) {
-                $this->storeAttachments($milestone, $attachments, $request->user()->id);
-            }
-
-            // Notify freelancer about new milestone
-            NotificationService::milestoneCreated(
-                $contract->freelancer_id,
-                $milestone->title,
-                $milestone->amount,
-                $contract->title,
-                $contract->id
-            );
-
-            return $milestone;
-        });
-
-        $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
-
-        // Broadcast real-time update
-        broadcast(new MilestoneUpdated($milestone, 'created', [
-            'action' => 'milestone_created',
-            'milestone_title' => $milestone->title,
-        ]));
-
-        // Log activity
-        ContractActivityService::milestoneCreated($milestone, $request->user()->id);
-
-        return $this->sendResponse(
-            new MilestoneResource($milestone),
-            'Milestone created successfully.',
-            201
-        );
-    }
-
     public function show(Request $request, Contract $contract, Milestone $milestone): JsonResponse
     {
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
+        $user = $request->user();
+
+        if ($contract->employer_id !== $user->id && $contract->freelancer_id !== $user->id && $user->role !== 'admin') {
+            return $this->sendForbidden('You do not have access to this milestone.');
         }
 
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
+        if ($milestone->contract_id !== $contract->id) {
+            return $this->sendError('Milestone not found for this contract.', [], 404);
         }
 
-        $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
+        $milestone->load(['creator', 'submissions' => fn ($q) => $q->latest()->with('submitter')]);
 
         return $this->sendResponse(
             new MilestoneResource($milestone),
@@ -223,308 +61,295 @@ class MilestoneController extends BaseApiController
     }
 
     /**
-     * Employer updates a milestone on an active contract.
+     * Employer: Create a milestone.
      */
-    public function update(MilestoneRequest $request, Contract $contract, Milestone $milestone): JsonResponse
+    public function store(Request $request, Contract $contract): JsonResponse
     {
-        $guard = $this->requireEmployer($request);
-        if ($guard) {
-            return $guard;
+        $user = $request->user();
+
+        if ($contract->employer_id !== $user->id) {
+            return $this->sendForbidden('Only the employer can create milestones.');
         }
 
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
+        if (!$contract->isActive()) {
+            return $this->sendError('Milestones can only be created for active contracts.', [], 422);
         }
 
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
+        $validated = $request->validate([
+            'title'        => 'required|string|max:255',
+            'description'  => 'nullable|string|max:5000',
+            'deliverables' => 'nullable|string|max:5000',
+            'amount'       => 'required|numeric|min:0|max:999999.99',
+            'due_date'     => 'nullable|date|after:now',
+        ]);
 
-        if (!in_array($contract->status, ['active', 'pending', 'paused'], true)) {
-            return $this->sendError('Milestones can only be updated on active or pending contracts.', [], 422);
-        }
-
-        if (!in_array($milestone->status, self::EDITABLE_STATUSES, true)) {
-            return $this->sendError(
-                "This milestone cannot be edited. Current status: '{$milestone->status}'.",
-                [],
-                422
-            );
-        }
-
-        $validated = $request->validated();
-        $attachments = $request->file('attachments');
-
-        DB::transaction(function () use ($milestone, $validated, $attachments, $request) {
-            $milestone->update([
-                'title' => $validated['title'] ?? $milestone->title,
-                'description' => $validated['description'] ?? $milestone->description,
-                'amount' => $validated['amount'] ?? $milestone->amount,
-                'due_date' => $validated['due_date'] ?? $milestone->due_date,
+        $milestone = DB::transaction(function () use ($validated, $contract, $user) {
+            $milestone = $contract->milestones()->create([
+                'title'        => $validated['title'],
+                'description'  => $validated['description'] ?? null,
+                'deliverables' => $validated['deliverables'] ?? null,
+                'amount'       => $validated['amount'],
+                'due_date'     => $validated['due_date'] ?? null,
+                'created_by'   => $user->id,
+                'status'       => Milestone::STATUS_DRAFT,
             ]);
 
-            // Handle new file attachments
-            if ($attachments && count($attachments) > 0) {
-                $this->storeAttachments($milestone, $attachments, $request->user()->id);
-            }
+            // Notify freelancer
+            NotificationService::milestoneCreated(
+                $contract->freelancer_id,
+                $milestone->title,
+                $milestone->amount,
+                $contract->title,
+                $contract->id
+            );
+
+            AuditService::record(
+                $user,
+                'milestone.created',
+                'Milestone',
+                $milestone->id,
+                "Employer created milestone \"{$milestone->title}\" in contract \"{$contract->title}\"."
+            );
+
+            return $milestone;
         });
 
-        $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
-
-        // Broadcast real-time update
-        broadcast(new MilestoneUpdated($milestone, 'updated', [
-            'action' => 'milestone_updated',
-        ]));
+        $milestone->load(['creator']);
 
         return $this->sendResponse(
-            new MilestoneResource($milestone->fresh()),
+            new MilestoneResource($milestone),
+            'Milestone created successfully.',
+            201
+        );
+    }
+
+    /**
+     * Employer: Update a draft milestone.
+     */
+    public function update(Request $request, Contract $contract, Milestone $milestone): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($contract->employer_id !== $user->id) {
+            return $this->sendForbidden('Only the employer can update milestones.');
+        }
+
+        if ($milestone->contract_id !== $contract->id) {
+            return $this->sendError('Milestone not found for this contract.', [], 404);
+        }
+
+        if ($milestone->status !== Milestone::STATUS_DRAFT) {
+            return $this->sendError('Only draft milestones can be updated.', [], 422);
+        }
+
+        $validated = $request->validate([
+            'title'        => 'sometimes|required|string|max:255',
+            'description'  => 'nullable|string|max:5000',
+            'deliverables' => 'nullable|string|max:5000',
+            'amount'       => 'sometimes|required|numeric|min:0|max:999999.99',
+            'due_date'     => 'nullable|date|after:now',
+        ]);
+
+        $milestone->update($validated);
+        $milestone->load(['creator']);
+
+        return $this->sendResponse(
+            new MilestoneResource($milestone),
             'Milestone updated successfully.'
         );
     }
 
-    // ════════════════════════════════════════════════════════════════════
-    // FREELANCER: START WORK (funded → in_progress)
-    // ════════════════════════════════════════════════════════════════════
+    /**
+     * Employer: Delete a draft milestone.
+     */
+    public function destroy(Request $request, Contract $contract, Milestone $milestone): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($contract->employer_id !== $user->id) {
+            return $this->sendForbidden('Only the employer can delete milestones.');
+        }
+
+        if ($milestone->contract_id !== $contract->id) {
+            return $this->sendError('Milestone not found for this contract.', [], 404);
+        }
+
+        if ($milestone->status !== Milestone::STATUS_DRAFT) {
+            return $this->sendError('Only draft milestones can be deleted.', [], 422);
+        }
+
+        $milestone->delete();
+
+        return $this->sendResponse(null, 'Milestone deleted successfully.');
+    }
 
     /**
-     * Freelancer starts working on a funded milestone.
-     * Transitions: funded → in_progress
-     * Freelancer MUST NOT start work before the employer funds the milestone.
+     * Freelancer: Start working on a milestone.
      */
     public function startWork(Request $request, Contract $contract, Milestone $milestone): JsonResponse
     {
-        $guard = $this->requireFreelancer($request);
-        if ($guard) {
-            return $guard;
+        $user = $request->user();
+
+        if ($contract->freelancer_id !== $user->id) {
+            return $this->sendForbidden('Only the freelancer can start work on milestones.');
         }
 
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
+        if ($milestone->contract_id !== $contract->id) {
+            return $this->sendError('Milestone not found for this contract.', [], 404);
         }
 
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
+        if (!$milestone->canStartWork()) {
+            return $this->sendError("Milestone cannot be started. Current status: '{$milestone->status}'.", [], 422);
         }
 
-        if ($contract->status !== 'active') {
-            return $this->sendError('Milestones can only be started on active contracts.', [], 422);
-        }
-
-        // CRITICAL: Only allow starting funded milestones
-        if (!$milestone->isEscrowFunded() || $milestone->status !== Milestone::STATUS_FUNDED) {
-            return $this->sendError(
-                'This milestone has not been funded yet. You cannot start work until the employer has successfully funded the milestone.',
-                [],
-                422
-            );
-        }
-
-        DB::transaction(function () use ($milestone) {
+        DB::transaction(function () use ($milestone, $contract, $user) {
             $milestone->update([
-                'status' => Milestone::STATUS_IN_PROGRESS,
+                'status'     => Milestone::STATUS_IN_PROGRESS,
                 'started_at' => now(),
             ]);
+
+            NotificationService::milestoneStarted(
+                $contract->employer_id,
+                $milestone->title,
+                $contract->title,
+                $contract->id
+            );
+
+            AuditService::record(
+                $user,
+                'milestone.started',
+                'Milestone',
+                $milestone->id,
+                "Freelancer started work on milestone \"{$milestone->title}\"."
+            );
         });
 
-        // Notify the employer that work has started
-        $contract = $milestone->contract;
-        NotificationService::milestoneStarted(
-            $contract->employer_id,
-            $milestone->title,
-            $contract->title,
-            $contract->id
-        );
-
-        $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
-
-        // Broadcast real-time update
-        broadcast(new MilestoneUpdated($milestone, 'started', [
-            'action' => 'milestone_started',
-        ]));
-
-        // Log activity
-        ContractActivityService::milestoneStarted($milestone, $request->user()->id);
+        $milestone->load(['creator']);
 
         return $this->sendResponse(
-            new MilestoneResource($milestone->fresh()),
-            'Work started successfully. Good luck!'
+            new MilestoneResource($milestone),
+            'Work started successfully.'
         );
     }
 
-    // ════════════════════════════════════════════════════════════════════
-    // FREELANCER: SUBMIT WORK (in_progress → submitted)
-    // ════════════════════════════════════════════════════════════════════
-
     /**
-     * Freelancer submits a deliverable for milestone review.
-     * Only allowed from in_progress or revision_requested status.
-     * CRITICAL: Freelancer CANNOT submit before starting work (which requires funding).
+     * Freelancer: Submit work for a milestone.
      */
-    public function submit(MilestoneSubmissionRequest $request, Contract $contract, Milestone $milestone): JsonResponse
+    public function submitWork(Request $request, Contract $contract, Milestone $milestone): JsonResponse
     {
-        $guard = $this->requireFreelancer($request);
-        if ($guard) {
-            return $guard;
-        }
-
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
-
-        if ($contract->status !== 'active') {
-            return $this->sendError('Milestones can only be submitted on active contracts.', [], 422);
-        }
-
-        if (!in_array($milestone->status, self::SUBMITTABLE_STATUSES, true)) {
-            return $this->sendError(
-                "Milestone cannot be submitted from '{$milestone->status}' status. You must wait for the milestone to be funded and started before submitting work.",
-                [],
-                422
-            );
-        }
-
-        // Extra safety: ensure milestone is actually funded
-        if (!$milestone->isEscrowFunded()) {
-            return $this->sendError(
-                'This milestone has not been funded. Work cannot be submitted for unfunded milestones.',
-                [],
-                422
-            );
-        }
-
         $user = $request->user();
-        $validated = $request->validated();
 
-        $submission = DB::transaction(function () use ($contract, $milestone, $user, $validated, $request) {
-            // Create the deliverable submission record
-            $submission = MilestoneSubmission::create([
-                'milestone_id' => $milestone->id,
-                'submitted_by' => $user->id,
-                'description' => $validated['description'] ?? null,
-                'links' => $validated['links'] ?? [],
-                'status' => 'submitted',
-                'submitted_at' => now(),
-            ]);
+        if ($contract->freelancer_id !== $user->id) {
+            return $this->sendForbidden('Only the freelancer can submit work.');
+        }
 
-            // Handle file uploads safely
-            if ($request->hasFile('files')) {
-                foreach ($request->file('files') as $file) {
-                    $originalName = $file->getClientOriginalName();
-                    $mimeType = $file->getClientMimeType() ?: $file->getMimeType();
-                    $fileSize = $file->getSize();
-                    $extension = $file->getClientOriginalExtension();
-                    $storedName = Str::random(40) . ($extension ? ".{$extension}" : '');
-                    $storedPath = $file->storeAs("deliverables/{$contract->id}/{$milestone->id}", $storedName);
+        if ($milestone->contract_id !== $contract->id) {
+            return $this->sendError('Milestone not found for this contract.', [], 404);
+        }
 
-                    MilestoneSubmissionFile::create([
-                        'submission_id' => $submission->id,
-                        'uploader_id' => $user->id,
-                        'original_filename' => $originalName,
-                        'stored_path' => $storedPath,
-                        'mime_type' => $mimeType,
-                        'file_size' => $fileSize,
-                    ]);
+        if (!$milestone->canSubmitWork()) {
+            return $this->sendError("Work cannot be submitted for this milestone. Current status: '{$milestone->status}'.", [], 422);
+        }
+
+        $validated = $request->validate([
+            'description' => 'nullable|string|max:5000',
+            'links'       => 'nullable|array|max:10',
+            'links.*'     => 'url|max:2048',
+        ]);
+
+        // Handle file uploads
+        $uploadedFiles = [];
+        if ($request->hasFile('files')) {
+            $files = $request->file('files');
+            if (!is_array($files)) $files = [$files];
+            foreach ($files as $file) {
+                if ($file->isValid()) {
+                    $path = $file->store('milestone-submissions/' . $milestone->id, 'public');
+                    $uploadedFiles[] = [
+                        'path' => $path,
+                        'name' => $file->getClientOriginalName(),
+                        'size' => $file->getSize(),
+                        'type' => $file->getMimeType(),
+                    ];
                 }
             }
+        }
 
-            // Update milestone state
-            $milestone->update([
-                'status' => Milestone::STATUS_SUBMITTED,
+        DB::transaction(function () use ($validated, $uploadedFiles, $milestone, $contract, $user) {
+            // Create submission record
+            $milestone->submissions()->create([
+                'submitted_by' => $user->id,
+                'description'  => $validated['description'] ?? null,
+                'links'        => $validated['links'] ?? null,
+                'files'        => $uploadedFiles ?: null,
+                'status'       => 'submitted',
                 'submitted_at' => now(),
-                'approved_at' => null,
             ]);
 
-            return $submission;
+            $milestone->update([
+                'status'       => Milestone::STATUS_SUBMITTED,
+                'submitted_at' => now(),
+            ]);
+
+            NotificationService::milestoneSubmitted(
+                $contract->employer_id,
+                $milestone->title,
+                $contract->title,
+                $contract->id
+            );
+
+            AuditService::record(
+                $user,
+                'milestone.submitted',
+                'Milestone',
+                $milestone->id,
+                "Freelancer submitted work for milestone \"{$milestone->title}\"."
+            );
         });
 
-        // Notify the employer
-        NotificationService::milestoneSubmitted(
-            $contract->employer_id,
-            $milestone->title,
-            $contract->title,
-            $contract->id
-        );
-
-        $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
-
-        // Broadcast real-time update
-        broadcast(new MilestoneUpdated($milestone, 'submitted', [
-            'action' => 'milestone_submitted',
-        ]));
-
-        // Log activity
-        ContractActivityService::milestoneSubmitted($milestone, $request->user()->id);
+        $milestone->load(['creator', 'submissions']);
 
         return $this->sendResponse(
-            new MilestoneResource($milestone->fresh()),
-            'Work submitted successfully.'
+            new MilestoneResource($milestone),
+            'Work submitted successfully. The employer has been notified.'
         );
     }
 
-    // ════════════════════════════════════════════════════════════════════
-    // EMPLOYER: APPROVE MILESTONE (submitted → approved)
-    // ════════════════════════════════════════════════════════════════════
-
     /**
-     * Employer approves a submitted milestone deliverable.
-     * If all contract milestones are approved, auto-completes the contract and job.
+     * Employer: Approve a submitted milestone.
      */
     public function approve(Request $request, Contract $contract, Milestone $milestone): JsonResponse
     {
-        $guard = $this->requireEmployer($request);
-        if ($guard) {
-            return $guard;
-        }
-
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
-
-        if ($contract->status !== 'active') {
-            return $this->sendError('Milestones can only be approved on active contracts.', [], 422);
-        }
-
-        if ($milestone->status !== Milestone::STATUS_SUBMITTED) {
-            return $this->sendError(
-                "Only submitted milestones can be approved. Current status: '{$milestone->status}'.",
-                [],
-                422
-            );
-        }
-
         $user = $request->user();
 
-        try {
-            // Update latest submission to approved
-            $latestSubmission = $milestone->submissions()->where('status', 'submitted')->latest()->first();
+        if ($contract->employer_id !== $user->id) {
+            return $this->sendForbidden('Only the employer can approve milestones.');
+        }
+
+        if ($milestone->contract_id !== $contract->id) {
+            return $this->sendError('Milestone not found for this contract.', [], 404);
+        }
+
+        if (!$milestone->canReview()) {
+            return $this->sendError("Milestone cannot be approved. Current status: '{$milestone->status}'.", [], 422);
+        }
+
+        DB::transaction(function () use ($milestone, $contract, $user) {
+            $milestone->update([
+                'status'      => Milestone::STATUS_APPROVED,
+                'approved_at' => now(),
+            ]);
+
+            // Mark latest submission as approved
+            $latestSubmission = $milestone->submissions()->latest()->first();
             if ($latestSubmission) {
                 $latestSubmission->update([
-                    'status' => 'approved',
+                    'status'     => 'approved',
                     'reviewed_at' => now(),
                     'reviewed_by' => $user->id,
                 ]);
             }
 
-            // Release escrow money to freelancer & platform fee
-            $result = $this->walletService->releaseMilestone($milestone, $user);
-
-            // Notify the freelancer about milestone approval
             NotificationService::milestoneApproved(
                 $contract->freelancer_id,
                 $milestone->title,
@@ -532,479 +357,204 @@ class MilestoneController extends BaseApiController
                 $contract->id
             );
 
-            $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
-
-            // Broadcast real-time update
-            broadcast(new MilestoneUpdated($milestone, 'approved', [
-                'action' => 'milestone_approved',
-            ]));
-
-            // Log activity
-            ContractActivityService::milestoneApproved($milestone, $user->id);
-
-            return $this->sendResponse(
-                new MilestoneResource($milestone->fresh()),
-                'Milestone approved and escrow funds released successfully.'
+            AuditService::record(
+                $user,
+                'milestone.approved',
+                'Milestone',
+                $milestone->id,
+                "Employer approved milestone \"{$milestone->title}\"."
             );
-        } catch (\Exception $e) {
-            return $this->sendError($e->getMessage(), [], 422);
-        }
+
+            // Release funds to freelancer if milestone was funded
+            if ($milestone->isFunded()) {
+                try {
+                    $paymentService = app(PaymentService::class);
+                    $paymentService->releaseMilestone($milestone, $user->id);
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::warning('Failed to release milestone funds', [
+                        'milestone_id' => $milestone->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        });
+
+        $milestone->load(['creator', 'submissions']);
+
+        return $this->sendResponse(
+            new MilestoneResource($milestone),
+            'Work approved successfully.'
+        );
     }
 
-    // ════════════════════════════════════════════════════════════════════
-    // EMPLOYER: REQUEST REVISION (submitted → revision_requested → in_progress)
-    // ════════════════════════════════════════════════════════════════════
-
     /**
-     * Employer sends a submitted milestone back for revision with feedback instructions.
+     * Employer: Request revision on a submitted milestone.
      */
-    public function revision(MilestoneRevisionRequest $request, Contract $contract, Milestone $milestone): JsonResponse
+    public function requestRevision(Request $request, Contract $contract, Milestone $milestone): JsonResponse
     {
-        $guard = $this->requireEmployer($request);
-        if ($guard) {
-            return $guard;
-        }
-
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
-
-        if ($contract->status !== 'active') {
-            return $this->sendError('Milestones can only be revised on active contracts.', [], 422);
-        }
-
-        if ($milestone->status !== Milestone::STATUS_SUBMITTED) {
-            return $this->sendError(
-                "Only submitted milestones can be sent for revision. Current status: '{$milestone->status}'.",
-                [],
-                422
-            );
-        }
-
         $user = $request->user();
-        $revisionNote = $request->input('revision_note');
 
-        DB::transaction(function () use ($milestone, $user, $revisionNote) {
-            // Update latest submission
-            $latestSubmission = $milestone->submissions()->where('status', 'submitted')->latest()->first();
+        if ($contract->employer_id !== $user->id) {
+            return $this->sendForbidden('Only the employer can request revisions.');
+        }
+
+        if ($milestone->contract_id !== $contract->id) {
+            return $this->sendError('Milestone not found for this contract.', [], 404);
+        }
+
+        if (!$milestone->canReview()) {
+            return $this->sendError("Revision cannot be requested. Current status: '{$milestone->status}'.", [], 422);
+        }
+
+        $validated = $request->validate([
+            'revision_note' => 'required|string|max:5000',
+        ]);
+
+        DB::transaction(function () use ($validated, $milestone, $contract, $user) {
+            $milestone->update([
+                'status' => Milestone::STATUS_REVISION,
+            ]);
+
+            // Mark latest submission as revision requested
+            $latestSubmission = $milestone->submissions()->latest()->first();
             if ($latestSubmission) {
                 $latestSubmission->update([
-                    'status' => 'revision_requested',
-                    'revision_note' => $revisionNote,
-                    'reviewed_at' => now(),
-                    'reviewed_by' => $user->id,
+                    'status'        => 'revision_requested',
+                    'revision_note' => $validated['revision_note'],
+                    'reviewed_at'   => now(),
+                    'reviewed_by'   => $user->id,
                 ]);
             }
 
-            $milestone->update([
-                'status' => Milestone::STATUS_REVISION_REQUESTED,
-                'submitted_at' => null,
-            ]);
+            NotificationService::milestoneRevision(
+                $contract->freelancer_id,
+                $milestone->title,
+                $contract->title,
+                $contract->id,
+                $validated['revision_note']
+            );
+
+            AuditService::record(
+                $user,
+                'milestone.revision_requested',
+                'Milestone',
+                $milestone->id,
+                "Employer requested revision for milestone \"{$milestone->title}\"."
+            );
         });
 
-        // Notify the freelancer about revision request
-        NotificationService::milestoneRevision(
-            $contract->freelancer_id,
-            $milestone->title,
-            $contract->title,
-            $contract->id,
-            $revisionNote
-        );
-
-        $milestone->load(['attachments', 'submissions.files', 'submissions.submitter', 'submissions.reviewer']);
-
-        // Broadcast real-time update
-        broadcast(new MilestoneUpdated($milestone, 'revision_requested', [
-            'action' => 'milestone_revision_requested',
-            'revision_note' => $revisionNote,
-        ]));
-
-        // Log activity
-        ContractActivityService::milestoneRevisionRequested($milestone, $user->id, $revisionNote);
+        $milestone->load(['creator', 'submissions']);
 
         return $this->sendResponse(
-            new MilestoneResource($milestone->fresh()),
+            new MilestoneResource($milestone),
             'Revision requested successfully.'
         );
     }
 
     /**
-     * Get all deliverable submissions (history) for a milestone.
+     * Employer: Open a dispute on a milestone.
      */
-    public function submissions(Request $request, Contract $contract, Milestone $milestone): JsonResponse
-    {
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
-
-        $submissions = $milestone->submissions()
-            ->with(['submitter', 'reviewer', 'files'])
-            ->orderByDesc('created_at')
-            ->get();
-
-        return $this->sendResponse(
-            MilestoneSubmissionResource::collection($submissions),
-            'Milestone submissions retrieved successfully.'
-        );
-    }
-
-    /**
-     * Securely download a submission deliverable file.
-     */
-    public function downloadFile(
-        Request $request,
-        Contract $contract,
-        Milestone $milestone,
-        MilestoneSubmission $submission,
-        MilestoneSubmissionFile $file
-    ): StreamedResponse|JsonResponse {
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
-
-        if ($submission->milestone_id !== $milestone->id) {
-            return $this->sendError('Submission not found for this milestone.', [], 404);
-        }
-
-        if ($file->submission_id !== $submission->id) {
-            return $this->sendError('File not found for this submission.', [], 404);
-        }
-
-        if (!Storage::exists($file->stored_path)) {
-            return $this->sendError('The requested file is no longer available.', [], 404);
-        }
-
-        return Storage::download($file->stored_path, $file->original_filename);
-    }
-
-    // ════════════════════════════════════════════════════════════════════
-    // MILESTONE ATTACHMENT ENDPOINTS (employer-created attachments)
-    // ════════════════════════════════════════════════════════════════════
-
-    /**
-     * Download a milestone attachment.
-     */
-    public function downloadAttachment(
-        Request $request,
-        Contract $contract,
-        Milestone $milestone,
-        MilestoneAttachment $attachment
-    ): StreamedResponse|JsonResponse {
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
-
-        if ($attachment->milestone_id !== $milestone->id) {
-            return $this->sendError('Attachment not found for this milestone.', [], 404);
-        }
-
-        if (!Storage::exists($attachment->stored_path)) {
-            return $this->sendError('The requested file is no longer available.', [], 404);
-        }
-
-        return Storage::download($attachment->stored_path, $attachment->original_filename);
-    }
-
-    /**
-     * Preview a milestone attachment inline (for images, video, audio, PDF).
-     */
-    public function previewAttachment(
-        Request $request,
-        Contract $contract,
-        Milestone $milestone,
-        MilestoneAttachment $attachment
-    ): StreamedResponse|JsonResponse {
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
-
-        if ($attachment->milestone_id !== $milestone->id) {
-            return $this->sendError('Attachment not found for this milestone.', [], 404);
-        }
-
-        if (!Storage::exists($attachment->stored_path)) {
-            return $this->sendError('The requested file is no longer available.', [], 404);
-        }
-
-        $mimeType = $attachment->mime_type ?? 'application/octet-stream';
-
-        return Storage::response($attachment->stored_path, $attachment->original_filename, [
-            'Content-Type' => $mimeType,
-            'Content-Disposition' => 'inline; filename="' . $attachment->original_filename . '"',
-        ]);
-    }
-
-    /**
-     * Delete a milestone attachment (only before funding).
-     */
-    public function deleteAttachment(
-        Request $request,
-        Contract $contract,
-        Milestone $milestone,
-        MilestoneAttachment $attachment
-    ): JsonResponse {
-        $guard = $this->requireEmployer($request);
-        if ($guard) {
-            return $guard;
-        }
-
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
-
-        if ($attachment->milestone_id !== $milestone->id) {
-            return $this->sendError('Attachment not found for this milestone.', [], 404);
-        }
-
-        // Only allow deletion before funding
-        if ($milestone->isEscrowFunded()) {
-            return $this->sendError('Cannot delete attachments from a funded milestone.', [], 422);
-        }
-
-        DB::transaction(function () use ($attachment) {
-            if (Storage::exists($attachment->stored_path)) {
-                Storage::delete($attachment->stored_path);
-            }
-            $attachment->delete();
-        });
-
-        return $this->sendResponse(null, 'Attachment deleted successfully.');
-    }
-
-    /**
-     * Preview a submission file inline (for images, video, audio, PDF).
-     */
-    public function previewFile(
-        Request $request,
-        Contract $contract,
-        Milestone $milestone,
-        MilestoneSubmission $submission,
-        MilestoneSubmissionFile $file
-    ): StreamedResponse|JsonResponse {
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
-
-        if ($submission->milestone_id !== $milestone->id) {
-            return $this->sendError('Submission not found for this milestone.', [], 404);
-        }
-
-        if ($file->submission_id !== $submission->id) {
-            return $this->sendError('File not found for this submission.', [], 404);
-        }
-
-        if (!Storage::exists($file->stored_path)) {
-            return $this->sendError('The requested file is no longer available.', [], 404);
-        }
-
-        $mimeType = $file->mime_type ?? 'application/octet-stream';
-
-        return Storage::response($file->stored_path, $file->original_filename, [
-            'Content-Type' => $mimeType,
-            'Content-Disposition' => 'inline; filename="' . $file->original_filename . '"',
-        ]);
-    }
-
-    /**
-     * Employer deletes a milestone that has not been started yet.
-     */
-    public function destroy(Request $request, Contract $contract, Milestone $milestone): JsonResponse
-    {
-        $guard = $this->requireEmployer($request);
-        if ($guard) {
-            return $guard;
-        }
-
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $milestone = $this->findScopedMilestone($contract, $milestone);
-        if ($milestone instanceof JsonResponse) {
-            return $milestone;
-        }
-
-        if (!in_array($contract->status, ['active', 'pending', 'paused'], true)) {
-            return $this->sendError('Milestones can only be deleted on active or pending contracts.', [], 422);
-        }
-
-        // Only allow deleting milestones that haven't been funded yet
-        if ($milestone->status !== Milestone::STATUS_AWAITING_FUNDING) {
-            return $this->sendError(
-                'Only unfunded milestones can be deleted. Current status: \'' . $milestone->status . '\'.',
-                [],
-                422
-            );
-        }
-
-        DB::transaction(function () use ($milestone) {
-            // Delete associated attachment files
-            foreach ($milestone->attachments as $attachment) {
-                if (Storage::exists($attachment->stored_path)) {
-                    Storage::delete($attachment->stored_path);
-                }
-            }
-            $milestone->delete();
-        });
-
-        return $this->sendResponse(null, 'Milestone deleted successfully.');
-    }
-
-    // ════════════════════════════════════════════════════════════════════
-    // PRIVATE HELPERS
-    // ════════════════════════════════════════════════════════════════════
-
-    /**
-     * Store milestone attachments from uploaded files.
-     */
-    private function storeAttachments(Milestone $milestone, array $files, int $uploaderId): void
-    {
-        foreach ($files as $file) {
-            $originalName = $file->getClientOriginalName();
-            $mimeType = $file->getClientMimeType() ?: $file->getMimeType();
-            $fileSize = $file->getSize();
-            $extension = $file->getClientOriginalExtension();
-            $storedName = Str::random(40) . ($extension ? ".{$extension}" : '');
-            $storedPath = $file->storeAs("milestone-attachments/{$milestone->contract_id}/{$milestone->id}", $storedName);
-
-            MilestoneAttachment::create([
-                'milestone_id' => $milestone->id,
-                'uploader_id' => $uploaderId,
-                'original_filename' => $originalName,
-                'stored_path' => $storedPath,
-                'mime_type' => $mimeType,
-                'file_size' => $fileSize,
-            ]);
-        }
-    }
-
-    /**
-     * Only employers and admins may create/update/approve/revise/delete milestones.
-     */
-    private function requireEmployer(Request $request): ?JsonResponse
+    public function openDispute(Request $request, Contract $contract, Milestone $milestone): JsonResponse
     {
         $user = $request->user();
 
-        if ($user->role !== 'employer' && $user->role !== 'admin') {
-            return $this->sendForbidden('Only employers can manage milestones.');
+        if ($contract->employer_id !== $user->id && $contract->freelancer_id !== $user->id) {
+            return $this->sendForbidden('You do not have access to this milestone.');
         }
 
-        return null;
-    }
-
-    /**
-     * Only freelancers and admins may submit milestones.
-     */
-    private function requireFreelancer(Request $request): ?JsonResponse
-    {
-        $user = $request->user();
-
-        if ($user->role !== 'freelancer' && $user->role !== 'admin') {
-            return $this->sendForbidden('Only freelancers can submit work for milestones.');
-        }
-
-        return null;
-    }
-
-    /**
-     * Load a contract the authenticated user belongs to (owner or admin).
-     */
-    private function loadOwnedContract(Request $request, Contract $contract): Contract|JsonResponse
-    {
-        $user = $request->user();
-
-        $isOwner = $contract->employer_id === $user->id || $contract->freelancer_id === $user->id;
-
-        if (!$isOwner && $user->role !== 'admin') {
-            return $this->sendError('You do not have access to this contract.', [], 403);
-        }
-
-        return $contract;
-    }
-
-    /**
-     * Ensure the URL milestone actually belongs to the URL contract.
-     * Returns 404 when it does not, to avoid leaking existence.
-     */
-    private function findScopedMilestone(Contract $contract, Milestone $milestone): Milestone|JsonResponse
-    {
         if ($milestone->contract_id !== $contract->id) {
             return $this->sendError('Milestone not found for this contract.', [], 404);
         }
 
-        return $milestone;
+        $validated = $request->validate([
+            'reason' => 'required|string|max:5000',
+        ]);
+
+        DB::transaction(function () use ($validated, $milestone, $contract, $user) {
+            $milestone->update(['status' => Milestone::STATUS_DISPUTED]);
+            $contract->update(['status' => Contract::STATUS_DISPUTED]);
+
+            // Create a report for admin review
+            \App\Models\Report::create([
+                'reporter_id' => $user->id,
+                'target_type' => 'milestone',
+                'target_id'   => $milestone->id,
+                'reason'      => $validated['reason'],
+                'status'      => 'pending',
+            ]);
+
+            // Notify both parties
+            $otherUserId = $user->id === $contract->employer_id
+                ? $contract->freelancer_id
+                : $contract->employer_id;
+            $otherRole = $user->id === $contract->employer_id ? 'freelancer' : 'employer';
+
+            NotificationService::disputeRaised(
+                $otherUserId,
+                $contract->title,
+                $contract->id,
+                $otherRole
+            );
+
+            AuditService::record(
+                $user,
+                'milestone.disputed',
+                'Milestone',
+                $milestone->id,
+                "Dispute opened on milestone \"{$milestone->title}\"."
+            );
+        });
+
+        $milestone->load(['creator']);
+
+        return $this->sendResponse(
+            new MilestoneResource($milestone),
+            'Dispute opened successfully. An administrator will review it.'
+        );
     }
 
     /**
-     * Admin index: List all platform milestones across contracts with filters.
+     * Delete a file from a submission.
      */
-    public function adminIndex(Request $request): JsonResponse
+    public function deleteSubmissionFile(Request $request, Contract $contract, Milestone $milestone, MilestoneSubmission $submission): JsonResponse
     {
-        if ($request->user()->role !== 'admin') {
-            return $this->sendForbidden();
+        $user = $request->user();
+
+        if ($contract->employer_id !== $user->id && $contract->freelancer_id !== $user->id) {
+            return $this->sendForbidden('You do not have access to this submission.');
         }
 
-        $query = Milestone::with(['contract.employer', 'contract.freelancer']);
-
-        if ($request->filled('status')) {
-            $query->where('status', $request->status);
+        if ($milestone->contract_id !== $contract->id || $submission->milestone_id !== $milestone->id) {
+            return $this->sendError('Submission not found.', [], 404);
         }
 
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('title', 'like', "%{$search}%")
-                  ->orWhereHas('contract', function ($cq) use ($search) {
-                      $cq->where('title', 'like', "%{$search}%");
-                  });
-            });
+        $validated = $request->validate([
+            'file_path' => 'required|string',
+        ]);
+
+        $files = $submission->files ?? [];
+        $filePath = $validated['file_path'];
+        $found = false;
+
+        foreach ($files as $i => $file) {
+            if ($file['path'] === $filePath) {
+                // Delete from storage
+                $fullPath = storage_path('app/public/' . $filePath);
+                if (file_exists($fullPath)) {
+                    unlink($fullPath);
+                }
+                unset($files[$i]);
+                $found = true;
+                break;
+            }
         }
 
-        $milestones = $query->orderBy('created_at', 'desc')->paginate($request->get('per_page', 15));
+        if (!$found) {
+            return $this->sendError('File not found in this submission.', [], 404);
+        }
 
-        return $this->sendResponse(MilestoneResource::collection($milestones));
+        $submission->update(['files' => array_values($files)]);
+
+        return $this->sendResponse(null, 'File deleted successfully.');
     }
 }

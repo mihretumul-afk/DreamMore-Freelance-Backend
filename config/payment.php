@@ -1,95 +1,59 @@
 <?php
 
 return [
-
     /*
     |--------------------------------------------------------------------------
     | Payment Provider
     |--------------------------------------------------------------------------
-    |
-    | The payment provider driver to use. Supported: 'manual', 'chapa'.
-    | Set via PAYMENT_PROVIDER env variable.
-    |
+    | Default provider for processing payments. Use 'sandbox' for development.
+    | Options: 'sandbox', 'telebirr', 'cbe', 'stripe'
     */
-
-    'provider' => env('PAYMENT_PROVIDER', 'manual'),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Payment Environment
-    |--------------------------------------------------------------------------
-    |
-    | The payment environment: 'sandbox' or 'production'.
-    | Set via PAYMENT_ENVIRONMENT env variable.
-    |
-    */
-
-    'environment' => env('PAYMENT_ENVIRONMENT', 'sandbox'),
+    'default' => env('PAYMENT_PROVIDER', 'sandbox'),
 
     /*
     |--------------------------------------------------------------------------
     | Platform Fee Rate
     |--------------------------------------------------------------------------
-    |
-    | Platform fee as a decimal fraction. 0.05 = 5%.
-    | This is charged on each milestone funding transaction.
-    |
+    | Percentage of payment amount charged as platform fee (0.08 = 8%).
     */
-
-    'platform_fee_rate' => (float) env('PLATFORM_FEE_RATE', 0.05),
+    'platform_fee_rate' => env('PLATFORM_FEE_RATE', 0.08),
 
     /*
     |--------------------------------------------------------------------------
-    | Payment Processing Fee Rate
+    | Processing Fee Rate
     |--------------------------------------------------------------------------
-    |
-    | Additional processing fee charged by the payment gateway.
-    | 0.02 = 2%. This is added on top of the platform fee.
-    |
+    | Percentage of payment amount charged as processing fee (0.025 = 2.5%).
     */
-
-    'processing_fee_rate' => (float) env('PROCESSING_FEE_RATE', 0.02),
+    'processing_fee_rate' => env('PROCESSING_FEE_RATE', 0.025),
 
     /*
     |--------------------------------------------------------------------------
-    | Minimum Withdrawal Amount
+    | Withdrawal Fee Rate
     |--------------------------------------------------------------------------
-    |
-    | The minimum amount a freelancer can withdraw in ETB.
-    |
+    | Percentage of withdrawal amount charged as withdrawal fee (0.015 = 1.5%).
     */
-
-    'min_withdrawal' => (float) env('MIN_WITHDRAWAL_AMOUNT', 100),
+    'withdrawal_fee_rate' => env('WITHDRAWAL_FEE_RATE', 0.015),
 
     /*
     |--------------------------------------------------------------------------
-    | Withdrawal Fee
+    | Clearance Period
     |--------------------------------------------------------------------------
-    |
-    | Fee charged on each withdrawal as a percentage.
-    | 0.01 = 1%.
-    |
+    | Number of days before pending earnings become available for withdrawal.
     */
-
-    'withdrawal_fee_rate' => (float) env('WITHDRAWAL_FEE_RATE', 0.01),
+    'clearance_days' => env('EARNINGS_CLEARANCE_DAYS', 7),
 
     /*
     |--------------------------------------------------------------------------
-    | Chapa Configuration
+    | Minimum Withdrawal
     |--------------------------------------------------------------------------
-    |
-    | Credentials and settings for the Chapa payment gateway.
-    | Set via PAYMENT_PUBLIC_KEY, PAYMENT_SECRET_KEY, PAYMENT_WEBHOOK_SECRET env.
-    |
+    | Minimum amount that can be withdrawn.
     */
+    'min_withdrawal' => env('MIN_WITHDRAWAL', 100),
 
-    'chapa' => [
-        'public_key'     => env('PAYMENT_PUBLIC_KEY', ''),
-        'secret_key'     => env('PAYMENT_SECRET_KEY', ''),
-        'webhook_secret' => env('PAYMENT_WEBHOOK_SECRET', ''),
-        'base_url'       => env('PAYMENT_BASE_URL', 'https://api.chapa.co/v1'),
-        'callback_url'   => env('PAYMENT_CALLBACK_URL', env('APP_URL') . '/api/v1/payments/webhook/chapa'),
-        'return_url'     => env('PAYMENT_RETURN_URL', env('FRONTEND_URL', 'http://localhost:5173') . '/payment/result'),
-    ],
-
+    /*
+    |--------------------------------------------------------------------------
+    | Supported Currencies
+    |--------------------------------------------------------------------------
+    */
+    'supported_currencies' => ['ETB', 'USD'],
 ];

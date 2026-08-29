@@ -5,7 +5,6 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class MilestoneSubmission extends Model
 {
@@ -16,6 +15,7 @@ class MilestoneSubmission extends Model
         'submitted_by',
         'description',
         'links',
+        'files',
         'status',
         'revision_note',
         'submitted_at',
@@ -24,9 +24,10 @@ class MilestoneSubmission extends Model
     ];
 
     protected $casts = [
-        'links' => 'array',
+        'links'        => 'array',
+        'files'        => 'array',
         'submitted_at' => 'datetime',
-        'reviewed_at' => 'datetime',
+        'reviewed_at'  => 'datetime',
     ];
 
     public function milestone(): BelongsTo
@@ -42,10 +43,5 @@ class MilestoneSubmission extends Model
     public function reviewer(): BelongsTo
     {
         return $this->belongsTo(User::class, 'reviewed_by');
-    }
-
-    public function files(): HasMany
-    {
-        return $this->hasMany(MilestoneSubmissionFile::class, 'submission_id');
     }
 }

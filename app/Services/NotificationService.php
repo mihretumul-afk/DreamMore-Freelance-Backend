@@ -3,16 +3,8 @@
 namespace App\Services;
 
 use App\Events\NotificationCreated;
-use App\Mail\MilestonePaidMail;
-use App\Mail\PaymentEscrowFundedMail;
-use App\Mail\PaymentFailedMail;
-use App\Mail\RefundCompletedMail;
-use App\Mail\WithdrawalCompletedMail;
-use App\Mail\WithdrawalFailedMail;
-use App\Mail\WithdrawalRequestedMail;
 use App\Models\Notification;
 use App\Models\User;
-use Illuminate\Support\Facades\Mail;
 
 class NotificationService
 {
@@ -35,7 +27,15 @@ class NotificationService
         ]);
 
         // Broadcast in real-time via Reverb
-        broadcast(new NotificationCreated($notification));
+        try {
+            broadcast(new NotificationCreated($notification));
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::warning('Failed to broadcast notification', [
+                'notification_id' => $notification->id,
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         return $notification;
     }
@@ -83,19 +83,182 @@ class NotificationService
     /**
      * Notify about contract creation.
      */
-    public static function contractCreated(int $userId, string $title, string $role): Notification
+    public static function contractCreated(int $userId, string $title, string $role, ?int $contractId = null): Notification
     {
-        $link = $role === 'employer' ? '/employer/contracts' : '/freelancer/contracts';
+        $link = $role === 'employer' ? "/employer/contracts" : "/freelancer/contracts";
+        if ($contractId) {
+            $link = $role === 'employer' ? "/employer/contracts/{$contractId}" : "/freelancer/contracts/{$contractId}";
+        }
         $message = $role === 'employer'
-            ? "Contract created successfully."
-            : "Your proposal was accepted. A contract has been created.";
+            ? "Contract offer created for '{$title}' and sent to freelancer."
+            : "Your proposal for '{$title}' was accepted. A contract offer has been created for your review.";
 
         return self::create(
             $userId,
             'contract_created',
-            'Contract Created',
+            'Contract Offer Created',
             $message,
             $link
+        );
+    }
+
+    /**
+     * Notify about contract accepted.
+     */
+    public static function contractAccepted(int $userId, string $title, string $role, int $contractId): Notification
+    {
+        $link = $role === 'employer' ? "/employer/contracts/{$contractId}" : "/freelancer/contracts/{$contractId}";
+        $message = $role === 'employer'
+            ? "The freelancer has accepted the contract offer for '{$title}'. The contract is now Active."
+            : "You have accepted the contract for '{$title}'. The contract is now Active.";
+
+        return self::create(
+            $userId,
+            'contract_accepted',
+            'Contract Offer Accepted',
+            $message,
+            $link
+        );
+    }
+
+    /**
+     * Notify about contract declined.
+     */
+    public static function contractDeclined(int $userId, string $title, string $role, int $contractId, ?string $reason = null): Notification
+    {
+        $link = $role === 'employer' ? "/employer/contracts/{$contractId}" : "/freelancer/contracts/{$contractId}";
+        $message = $role === 'employer'
+            ? "The freelancer declined the contract offer for '{$title}'."
+            : "You declined the contract offer for '{$title}'.";
+        if ($reason) {
+            $message .= " Reason: {$reason}";
+        }
+
+        return self::create(
+            $userId,
+            'contract_declined',
+            'Contract Offer Declined',
+            $message,
+            $link
+        );
+    }
+
+    /**
+     * Notify that a milestone has been funded.
+     */
+    public static function milestoneFunded(int $freelancerId, string $milestoneTitle, string $contractTitle, int $contractId, float $amount): Notification
+    {
+        $formatted = 'ETB ' . number_format($amount, 2);
+        return self::create(
+            $freelancerId,
+            'milestone_funded',
+            'Milestone Funded',
+            "Milestone \"{$milestoneTitle}\" ({$formatted}) in contract \"{$contractTitle}\" has been funded. You can now start working!",
+            "/freelancer/contracts/{$contractId}"
+        );
+    }
+
+    /**
+     * Notify freelancer that payment has been released.
+     */
+    public static function milestonePaid(int $freelancerId, string $milestoneTitle, int $contractId, float $amount): Notification
+    {
+        $formatted = 'ETB ' . number_format($amount, 2);
+        return self::create(
+            $freelancerId,
+            'milestone_paid',
+            'Payment Released',
+            "You received {$formatted} for completing milestone \"{$milestoneTitle}\". The funds are now in your pending balance.",
+            "/freelancer/contracts/{$contractId}"
+        );
+    }
+
+    /**
+     * Notify about withdrawal requested.
+     */
+    public static function withdrawalRequested(int $userId, string $reference, float $amount, float $fee, float $netAmount): Notification
+    {
+        $formatted = 'ETB ' . number_format($amount, 2);
+        return self::create(
+            $userId,
+            'withdrawal_requested',
+            'Withdrawal Requested',
+            "Your withdrawal request for {$formatted} has been submitted and is being processed.",
+            '/freelancer/earnings'
+        );
+    }
+
+    /**
+     * Notify about withdrawal completed.
+     */
+    public static function withdrawalCompleted(int $userId, string $reference, float $amount, float $fee, float $netAmount): Notification
+    {
+        $formatted = 'ETB ' . number_format($netAmount, 2);
+        return self::create(
+            $userId,
+            'withdrawal_completed',
+            'Withdrawal Completed',
+            "Your withdrawal of {$formatted} has been processed and sent to your account.",
+            '/freelancer/earnings'
+        );
+    }
+
+    /**
+     * Notify about withdrawal failed.
+     */
+    public static function withdrawalFailed(int $userId, string $reference, float $amount, string $reason): Notification
+    {
+        $formatted = 'ETB ' . number_format($amount, 2);
+        return self::create(
+            $userId,
+            'withdrawal_failed',
+            'Withdrawal Failed',
+            "Your withdrawal of {$formatted} could not be processed. The amount has been returned to your balance.",
+            '/freelancer/earnings'
+        );
+    }
+
+    /**
+     * Notify about payment refund.
+     */
+    public static function paymentRefunded(int $userId, string $reference, float $amount, string $currency = 'ETB'): Notification
+    {
+        $formatted = "{$currency} " . number_format($amount, 2);
+        return self::create(
+            $userId,
+            'payment_refunded',
+            'Refund Issued',
+            "A refund of {$formatted} has been issued for payment {$reference}.",
+            '/employer/contracts'
+        );
+    }
+
+    /**
+     * Notify freelancer that a new milestone has been created.
+     */
+    public static function milestoneCreated(int $freelancerId, string $milestoneTitle, float $amount, string $contractTitle, int $contractId): Notification
+    {
+        $formatted = 'ETB ' . number_format($amount, 2);
+        return self::create(
+            $freelancerId,
+            'milestone_created',
+            'New Milestone Created',
+            "A new milestone \"{$milestoneTitle}\" ({$formatted}) has been created in contract \"{$contractTitle}\".",
+            "/freelancer/contracts/{$contractId}"
+        );
+    }
+
+    /**
+     * Notify employer that freelancer started working on a milestone.
+     */
+    public static function milestoneStarted(int $employerId, string $milestoneTitle, string $contractTitle, int $contractId): Notification
+    {
+        return self::create(
+            $employerId,
+            'milestone_started',
+            'Work Started',
+            "The freelancer has started working on milestone \"{$milestoneTitle}\" in contract \"{$contractTitle}\".",
+            "/employer/contracts/{$contractId}"
         );
     }
 
@@ -361,6 +524,26 @@ class NotificationService
     }
 
     /**
+     * Notify participants about admin note on a dispute.
+     */
+    public static function disputeUpdate(int $userId, string $disputeReason, int $reportId, string $note, string $role = 'freelancer'): Notification
+    {
+        $link = match ($role) {
+            'employer' => "/employer/disputes/{$reportId}",
+            'admin'    => "/admin/reports/{$reportId}",
+            default    => "/freelancer/disputes/{$reportId}",
+        };
+
+        return self::create(
+            $userId,
+            'dispute_update',
+            'Dispute Update',
+            "Dispute update ({$disputeReason}): {$note}",
+            $link
+        );
+    }
+
+    /**
      * Notify freelancer that their profile has been approved.
      */
     public static function freelancerApproved(int $freelancerId): Notification
@@ -405,364 +588,5 @@ class NotificationService
             "{$freelancerName} has registered as a freelancer and is awaiting approval.",
             '/admin/freelancers?status=pending'
         );
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // PAYMENT notifications
-    // ═══════════════════════════════════════════════════════════════════
-
-    // ═══════════════════════════════════════════════════════════════════
-    // PAYMENT notifications
-    // ═══════════════════════════════════════════════════════════════════
-
-    /**
-     * Notify freelancer that a milestone payment has been released to them.
-     */
-    public static function milestonePaid(int $freelancerId, string $milestoneTitle, int $contractId, float $amount): Notification
-    {
-        $formatted = 'ETB ' . number_format($amount, 2);
-        $notification = self::create(
-            $freelancerId,
-            'milestone_paid',
-            'Payment Released',
-            "You received {$formatted} for completing milestone \"{$milestoneTitle}\".",
-            "/freelancer/contracts/{$contractId}"
-        );
-
-        // Send email notification
-        self::sendPaymentEmail($freelancerId, 'milestone_paid', [
-            'milestoneTitle' => $milestoneTitle,
-            'contractId'     => $contractId,
-            'amount'         => $amount,
-        ]);
-
-        return $notification;
-    }
-
-    /**
-     * Notify employer that their escrow funding was successful.
-     */
-    public static function escrowFunded(int $employerId, string $milestoneTitle, int $contractId, float $amount): Notification
-    {
-        $formatted = 'ETB ' . number_format($amount, 2);
-        $notification = self::create(
-            $employerId,
-            'escrow_funded',
-            'Escrow Funded',
-            "{$formatted} has been held in escrow for milestone \"{$milestoneTitle}\".",
-            "/employer/contracts/{$contractId}"
-        );
-
-        // Send email notification
-        self::sendPaymentEmail($employerId, 'escrow_funded', [
-            'milestoneTitle' => $milestoneTitle,
-            'contractId'     => $contractId,
-            'amount'         => $amount,
-        ]);
-
-        return $notification;
-    }
-
-    /**
-     * Notify user that a refund has been issued.
-     */
-    public static function paymentRefunded(int $userId, string $reference, float $amount, string $currency = 'ETB'): Notification
-    {
-        $formatted = "{$currency} " . number_format($amount, 2);
-        $notification = self::create(
-            $userId,
-            'payment_refunded',
-            'Refund Issued',
-            "A refund of {$formatted} has been issued for payment {$reference}.",
-            '/freelancer/payments'
-        );
-
-        // Send email notification
-        self::sendPaymentEmail($userId, 'refund_completed', [
-            'reference' => $reference,
-            'amount'    => $amount,
-            'currency'  => $currency,
-        ]);
-
-        return $notification;
-    }
-
-    /**
-     * Notify user that a payment has failed.
-     */
-    public static function paymentFailed(int $userId, string $reference, float $amount, string $milestoneTitle, string $contractTitle, string $reason = ''): Notification
-    {
-        $formatted = 'ETB ' . number_format($amount, 2);
-        $notification = self::create(
-            $userId,
-            'payment_failed',
-            'Payment Failed',
-            "Your payment of {$formatted} for milestone \"{$milestoneTitle}\" could not be processed.",
-            '/employer/payments'
-        );
-
-        // Send email notification
-        self::sendPaymentEmail($userId, 'payment_failed', [
-            'reference'      => $reference,
-            'amount'         => $amount,
-            'milestoneTitle' => $milestoneTitle,
-            'contractTitle'  => $contractTitle,
-            'reason'         => $reason,
-        ]);
-
-        return $notification;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // WITHDRAWAL notifications
-    // ═══════════════════════════════════════════════════════════════════
-
-    /**
-     * Notify freelancer that their withdrawal request was received.
-     */
-    public static function withdrawalRequested(int $userId, string $reference, float $amount, float $fee, float $netAmount, ?string $methodName = null): Notification
-    {
-        $formatted = 'ETB ' . number_format($amount, 2);
-        $notification = self::create(
-            $userId,
-            'withdrawal_requested',
-            'Withdrawal Requested',
-            "Your withdrawal request for {$formatted} has been submitted and is being processed.",
-            '/freelancer/withdrawals'
-        );
-
-        // Send email notification
-        self::sendPaymentEmail($userId, 'withdrawal_requested', [
-            'reference'  => $reference,
-            'amount'     => $amount,
-            'fee'        => $fee,
-            'netAmount'  => $netAmount,
-            'methodName' => $methodName,
-        ]);
-
-        return $notification;
-    }
-
-    /**
-     * Notify freelancer that their withdrawal was completed.
-     */
-    public static function withdrawalCompleted(int $userId, string $reference, float $amount, float $fee, float $netAmount, ?string $methodName = null): Notification
-    {
-        $formatted = 'ETB ' . number_format($netAmount, 2);
-        $notification = self::create(
-            $userId,
-            'withdrawal_completed',
-            'Withdrawal Completed',
-            "Your withdrawal of {$formatted} has been processed and sent to your account.",
-            '/freelancer/withdrawals'
-        );
-
-        // Send email notification
-        self::sendPaymentEmail($userId, 'withdrawal_completed', [
-            'reference'  => $reference,
-            'amount'     => $amount,
-            'fee'        => $fee,
-            'netAmount'  => $netAmount,
-            'methodName' => $methodName,
-        ]);
-
-        return $notification;
-    }
-
-    /**
-     * Notify freelancer that their withdrawal failed.
-     */
-    public static function withdrawalFailed(int $userId, string $reference, float $amount, string $reason): Notification
-    {
-        $formatted = 'ETB ' . number_format($amount, 2);
-        $notification = self::create(
-            $userId,
-            'withdrawal_failed',
-            'Withdrawal Failed',
-            "Your withdrawal of {$formatted} could not be processed. The amount has been returned to your balance.",
-            '/freelancer/withdrawals'
-        );
-
-        // Send email notification
-        self::sendPaymentEmail($userId, 'withdrawal_failed', [
-            'reference' => $reference,
-            'amount'    => $amount,
-            'reason'    => $reason,
-        ]);
-
-        return $notification;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // MILESTONE LIFECYCLE notifications
-    // ═══════════════════════════════════════════════════════════════════
-
-    /**
-     * Notify freelancer that a new milestone has been created.
-     */
-    public static function milestoneCreated(int $freelancerId, string $milestoneTitle, float $amount, string $contractTitle, int $contractId): Notification
-    {
-        $formatted = 'ETB ' . number_format($amount, 2);
-        return self::create(
-            $freelancerId,
-            'milestone_created',
-            'New Milestone Created',
-            "A new milestone \"{$milestoneTitle}\" ({$formatted}) has been created in contract \"{$contractTitle}\".",
-            "/freelancer/contracts/{$contractId}"
-        );
-    }
-
-    /**
-     * Notify freelancer that a milestone has been funded and they can start work.
-     */
-    public static function milestoneFunded(int $freelancerId, string $milestoneTitle, float $amount, string $contractTitle, int $contractId): Notification
-    {
-        $formatted = 'ETB ' . number_format($amount, 2);
-        return self::create(
-            $freelancerId,
-            'milestone_funded',
-            'Milestone Funded — Start Working!',
-            "Milestone \"{$milestoneTitle}\" ({$formatted}) in contract \"{$contractTitle}\" has been funded. You can now start working!",
-            "/freelancer/contracts/{$contractId}"
-        );
-    }
-
-    /**
-     * Notify employer that the freelancer has started working on a milestone.
-     */
-    public static function milestoneStarted(int $employerId, string $milestoneTitle, string $contractTitle, int $contractId): Notification
-    {
-        return self::create(
-            $employerId,
-            'milestone_started',
-            'Work Started',
-            "The freelancer has started working on milestone \"{$milestoneTitle}\" in contract \"{$contractTitle}\".",
-            "/employer/contracts/{$contractId}"
-        );
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // EMAIL DISPATCH
-    // ═══════════════════════════════════════════════════════════════════
-
-    /**
-     * Dispatch an email notification for payment events.
-     *
-     * Uses Laravel's queue system so emails are sent asynchronously.
-     * Falls back to synchronous sending if queue is not configured.
-     */
-    private static function sendPaymentEmail(int $userId, string $type, array $data): void
-    {
-        $user = User::find($userId);
-        if (!$user || empty($user->email)) {
-            return;
-        }
-
-        // Don't send emails in testing environment
-        if (app()->environment('testing')) {
-            return;
-        }
-
-        $frontendUrl = config('app.frontend_url', env('FRONTEND_URL', 'http://localhost:5173'));
-        $currency    = $data['currency'] ?? 'ETB';
-        $amount      = $data['amount'] ?? 0;
-        $date        = now()->format('F j, Y \a\t g:i A');
-
-        try {
-            $mail = match ($type) {
-                'escrow_funded' => new PaymentEscrowFundedMail(
-                    userName:       $user->name,
-                    amount:         $amount,
-                    fee:            $data['fee'] ?? round($amount * config('payment.platform_fee_rate', 0.05), 2),
-                    currency:       $currency,
-                    reference:      $data['reference'] ?? '',
-                    milestoneTitle: $data['milestoneTitle'] ?? '',
-                    contractTitle:  $data['contractTitle'] ?? '',
-                    date:           $date,
-                    dashboardUrl:   "{$frontendUrl}/employer/contracts/" . ($data['contractId'] ?? ''),
-                ),
-
-                'milestone_paid' => new MilestonePaidMail(
-                    userName:       $user->name,
-                    amount:         $amount,
-                    fee:            $data['fee'] ?? round($amount * config('payment.platform_fee_rate', 0.05), 2),
-                    netAmount:      $data['netAmount'] ?? $amount,
-                    currency:       $currency,
-                    reference:      $data['reference'] ?? '',
-                    milestoneTitle: $data['milestoneTitle'] ?? '',
-                    contractTitle:  $data['contractTitle'] ?? '',
-                    date:           $date,
-                    dashboardUrl:   "{$frontendUrl}/freelancer/contracts/" . ($data['contractId'] ?? ''),
-                ),
-
-                'withdrawal_requested' => new WithdrawalRequestedMail(
-                    userName:     $user->name,
-                    amount:       $amount,
-                    fee:          $data['fee'] ?? 0,
-                    netAmount:    $data['netAmount'] ?? $amount,
-                    currency:     $currency,
-                    reference:    $data['reference'] ?? '',
-                    methodName:   $data['methodName'] ?? null,
-                    date:         $date,
-                    dashboardUrl: "{$frontendUrl}/freelancer/withdrawals",
-                ),
-
-                'withdrawal_completed' => new WithdrawalCompletedMail(
-                    userName:     $user->name,
-                    amount:       $amount,
-                    fee:          $data['fee'] ?? 0,
-                    netAmount:    $data['netAmount'] ?? $amount,
-                    currency:     $currency,
-                    reference:    $data['reference'] ?? '',
-                    methodName:   $data['methodName'] ?? null,
-                    date:         $date,
-                    dashboardUrl: "{$frontendUrl}/freelancer/withdrawals",
-                ),
-
-                'withdrawal_failed' => new WithdrawalFailedMail(
-                    userName:     $user->name,
-                    amount:       $amount,
-                    currency:     $currency,
-                    reference:    $data['reference'] ?? '',
-                    reason:       $data['reason'] ?? '',
-                    date:         $date,
-                    dashboardUrl: "{$frontendUrl}/freelancer/withdrawals",
-                ),
-
-                'refund_completed' => new RefundCompletedMail(
-                    userName:          $user->name,
-                    amount:            $amount,
-                    currency:          $currency,
-                    originalReference: $data['reference'] ?? '',
-                    reason:            $data['reason'] ?? null,
-                    date:              $date,
-                    dashboardUrl:      "{$frontendUrl}/freelancer/payments",
-                ),
-
-                'payment_failed' => new PaymentFailedMail(
-                    userName:       $user->name,
-                    amount:         $amount,
-                    currency:       $currency,
-                    reference:      $data['reference'] ?? '',
-                    milestoneTitle: $data['milestoneTitle'] ?? '',
-                    contractTitle:  $data['contractTitle'] ?? '',
-                    reason:         $data['reason'] ?? null,
-                    date:           $date,
-                    retryUrl:       "{$frontendUrl}/employer/contracts/" . ($data['contractId'] ?? ''),
-                ),
-
-                default => null,
-            };
-
-            if ($mail) {
-                Mail::to($user->email)->queue($mail);
-            }
-        } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::warning('Failed to send payment email', [
-                'user_id' => $userId,
-                'type'    => $type,
-                'error'   => $e->getMessage(),
-            ]);
-        }
     }
 }

@@ -2,17 +2,11 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Events\ContractUpdated;
 use App\Http\Resources\Api\V1\ContractResource;
 use App\Models\Contract;
-use App\Models\EmployerProfile;
-use App\Models\FreelancerProfile;
-use App\Models\Payment;
-use App\Models\Report;
+use App\Models\Milestone;
 use App\Services\AuditService;
-use App\Services\ContractActivityService;
 use App\Services\NotificationService;
-use App\Services\PaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -20,54 +14,58 @@ use Illuminate\Support\Facades\DB;
 class ContractController extends BaseApiController
 {
     /**
-     * Allowed contract status transitions.
-     * Terminal states (completed/cancelled) are not present as sources.
-     */
-    private const TRANSITIONS = [
-        'active' => ['paused', 'completed', 'cancelled', 'disputed'],
-        'paused' => ['active', 'cancelled', 'disputed'],
-        'disputed' => ['active', 'completed', 'cancelled'],
-    ];
-
-    private const ACTION_MESSAGES = [
-        'paused' => 'Contract paused successfully.',
-        'active' => 'Contract resumed successfully.',
-        'cancelled' => 'Contract cancelled successfully.',
-        'disputed' => 'Contract placed in dispute.',
-    ];
-
-    /**
-     * List contracts belonging to the authenticated user (or all for admins).
+     * List contracts for the authenticated user.
      */
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
 
-        $contracts = Contract::with(['job', 'employer', 'freelancer', 'milestones'])
-            ->when($user->role !== 'admin', function ($query) use ($user) {
-                $query->where(function ($q) use ($user) {
-                    $q->where('employer_id', $user->id)
-                        ->orWhere('freelancer_id', $user->id);
-                });
-            })
-            ->orderByDesc('created_at')
-            ->get();
+        $query = Contract::with(['job', 'employer', 'freelancer', 'milestones'])
+            ->where(function ($q) use ($user) {
+                $q->where('employer_id', $user->id)
+                  ->orWhere('freelancer_id', $user->id);
+            });
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->input('status'));
+        }
+
+        $contracts = $query->orderByDesc('created_at')->paginate(15);
 
         return $this->sendResponse(
             ContractResource::collection($contracts),
-            'Contracts retrieved successfully.'
+            'Contracts retrieved successfully.',
+            200,
+            [
+                'current_page' => $contracts->currentPage(),
+                'last_page'    => $contracts->lastPage(),
+                'per_page'     => $contracts->perPage(),
+                'total'        => $contracts->total(),
+            ]
         );
     }
 
     /**
-     * Show a single contract (owner or admin only).
+     * Show a single contract.
      */
     public function show(Request $request, Contract $contract): JsonResponse
     {
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
+        $user = $request->user();
+
+        if ($contract->employer_id !== $user->id && $contract->freelancer_id !== $user->id && $user->role !== 'admin') {
+            return $this->sendForbidden('You do not have access to this contract.');
         }
+
+        $contract->load([
+            'job',
+            'employer',
+            'freelancer',
+            'milestones.creator',
+            'milestones.submissions' => function ($q) {
+                $q->latest();
+            },
+            'proposal',
+        ]);
 
         return $this->sendResponse(
             new ContractResource($contract),
@@ -76,283 +74,121 @@ class ContractController extends BaseApiController
     }
 
     /**
-     * Get activity log for a contract.
+     * Employer: Accept a contract (freelancer has already accepted).
+     * This is called when employer reviews contract terms.
      */
-    public function activities(Request $request, Contract $contract): JsonResponse
+    public function employerAccept(Request $request, Contract $contract): JsonResponse
     {
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
+        $user = $request->user();
+
+        if ($contract->employer_id !== $user->id) {
+            return $this->sendForbidden('You do not have access to this contract.');
         }
 
-        $activities = ContractActivityService::getActivities($contract, 100);
+        if ($contract->status !== Contract::STATUS_PENDING) {
+            return $this->sendError("Contract cannot be accepted. Current status: '{$contract->status}'.", [], 422);
+        }
 
+        // Contract is auto-created by proposal acceptance.
+        // Employer doesn't need to "accept" - contract starts active after freelancer accepts.
         return $this->sendResponse(
-            $activities,
-            'Contract activities retrieved successfully.'
+            new ContractResource($contract->fresh()->load(['job', 'employer', 'freelancer', 'milestones'])),
+            'Contract is ready for freelancer acceptance.'
         );
-    }
-
-    public function pause(Request $request, Contract $contract): JsonResponse
-    {
-        return $this->changeStatus($request, $contract, 'paused');
-    }
-
-    public function resume(Request $request, Contract $contract): JsonResponse
-    {
-        return $this->changeStatus($request, $contract, 'active');
     }
 
     /**
-     * Complete a contract. All milestones must be approved/paid first.
+     * Freelancer: Accept the contract.
      */
-    public function complete(Request $request, Contract $contract): JsonResponse
+    public function freelancerAccept(Request $request, Contract $contract): JsonResponse
     {
-        $guard = $this->requireEmployer($request);
-        if ($guard) {
-            return $guard;
+        $user = $request->user();
+
+        if ($contract->freelancer_id !== $user->id) {
+            return $this->sendForbidden('You do not have access to this contract.');
         }
 
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
+        if ($contract->status !== Contract::STATUS_PENDING) {
+            return $this->sendError("Contract cannot be accepted. Current status: '{$contract->status}'.", [], 422);
         }
 
-        if (!in_array('completed', self::TRANSITIONS[$contract->status] ?? [], true)) {
-            return $this->sendError(
-                "Contract cannot be completed from '{$contract->status}' status.",
-                [],
-                422
-            );
-        }
-
-        $unfinished = $contract->milestones->reject(
-            fn ($milestone) => in_array($milestone->status, ['approved', 'paid'], true)
-        );
-
-        if ($unfinished->isNotEmpty()) {
-            return $this->sendError(
-                'All milestones must be approved before the contract can be completed. '
-                . $unfinished->count() . ' milestone(s) remain unfinished.',
-                [],
-                422
-            );
-        }
-
-        DB::transaction(function () use ($contract) {
+        DB::transaction(function () use ($contract, $user) {
             $contract->update([
-                'status' => 'completed',
-                'end_date' => now(),
+                'status'     => Contract::STATUS_ACTIVE,
+                'start_date' => now(),
             ]);
 
-            // Update associated job status
-            if ($contract->job) {
-                $contract->job->update(['status' => 'completed']);
-            }
+            // Notify employer
+            NotificationService::contractAccepted(
+                $contract->employer_id,
+                $contract->title,
+                'employer',
+                $contract->id
+            );
 
-            // Update freelancer profile stats
-            $freelancerProfile = FreelancerProfile::where('user_id', $contract->freelancer_id)->first();
-            if ($freelancerProfile) {
-                $freelancerProfile->increment('completed_jobs_count');
-                $freelancerProfile->increment('total_earnings', (float) $contract->total_amount);
-            }
-
-            // Update employer profile stats
-            $employerProfile = EmployerProfile::where('user_id', $contract->employer_id)->first();
-            if ($employerProfile) {
-                $employerProfile->increment('total_spent', (float) $contract->total_amount);
-            }
+            // Audit log
+            AuditService::record(
+                $user,
+                'contract.accepted',
+                'Contract',
+                $contract->id,
+                "Freelancer accepted contract for \"{$contract->title}\"."
+            );
         });
 
-        // Notify both parties
-        NotificationService::contractCompleted($contract->freelancer_id, $contract->title, 'freelancer');
-        NotificationService::contractCompleted($contract->employer_id, $contract->title, 'employer');
-
-        $contract->refresh()->load(['job', 'employer', 'freelancer', 'milestones']);
+        $contract->load(['job', 'employer', 'freelancer', 'milestones']);
 
         return $this->sendResponse(
             new ContractResource($contract),
-            'Contract completed successfully.'
+            'Contract accepted successfully. You can now start working on milestones.'
         );
     }
 
-    public function cancel(Request $request, Contract $contract): JsonResponse
-    {
-        return $this->changeStatus($request, $contract, 'cancelled');
-    }
-
     /**
-     * Raise a dispute on a contract. Available to either contract participant.
+     * Freelancer: Decline the contract.
      */
-    public function dispute(Request $request, Contract $contract): JsonResponse
+    public function freelancerDecline(Request $request, Contract $contract): JsonResponse
     {
         $user = $request->user();
 
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
+        if ($contract->freelancer_id !== $user->id) {
+            return $this->sendForbidden('You do not have access to this contract.');
         }
 
-        if (!in_array($contract->status, ['active', 'paused'], true)) {
-            return $this->sendError("Only active or paused contracts can be disputed. Current status: '{$contract->status}'.", [], 422);
+        if ($contract->status !== Contract::STATUS_PENDING) {
+            return $this->sendError("Contract cannot be declined. Current status: '{$contract->status}'.", [], 422);
         }
 
-        $validated = $request->validate([
-            'reason' => 'required|string|max:255',
-            'description' => 'nullable|string|max:5000',
-        ]);
-
-        DB::transaction(function () use ($contract, $user, $validated) {
-            $contract->update(['status' => 'disputed']);
-
-            Report::create([
-                'reporter_id' => $user->id,
-                'target_type' => 'contract',
-                'target_id' => $contract->id,
-                'reason' => $validated['reason'],
-                'description' => $validated['description'] ?? null,
-                'status' => 'pending',
-            ]);
-
-            // Mark all funded payments on this contract as disputed
-            // This prevents automatic release of escrow funds
-            $fundedPayments = Payment::where('contract_id', $contract->id)
-                ->whereIn('status', [Payment::STATUS_COMPLETED, Payment::STATUS_PROCESSING])
-                ->where('type', Payment::TYPE_ESCROW_FUNDED)
-                ->get();
-
-            foreach ($fundedPayments as $payment) {
-                PaymentService::markAsDisputed($payment, $user->id);
-            }
-
-            // Mark funded milestones as disputed to prevent release
-            $contract->milestones()
-                ->whereNotNull('escrow_funded_at')
-                ->whereNull('paid_at')
-                ->update(['status' => 'disputed']);
-
-            // Audit log the dispute
-            AuditService::log(
-                \App\Models\AuditLog::ACTION_DISPUTE_RESOLVED,
-                \App\Models\AuditLog::MODULE_DISPUTES,
-                'Contract', $contract->id,
-                [
-                    'reason'     => $validated['reason'],
-                    'action'     => 'dispute_raised',
-                    'payment_count' => $fundedPayments->count(),
-                ],
-                $user->id,
-                "User #{$user->id} raised dispute on contract \"{$contract->title}\" — {$fundedPayments->count()} payment(s) marked as disputed"
-            );
-        });
-
-        $isEmployer = $contract->employer_id === $user->id;
-        $otherUserId = $isEmployer ? $contract->freelancer_id : $contract->employer_id;
-        $otherUserRole = $isEmployer ? 'freelancer' : 'employer';
-
-        NotificationService::disputeRaised($otherUserId, $contract->title, $contract->id, $otherUserRole);
-
-        NotificationService::notifyAdmins(
-            'admin_contract_disputed',
-            'Contract Dispute Raised',
-            "A dispute was raised on contract '{$contract->title}' by {$user->name}.",
-            '/admin/reports'
-        );
-
-        $contract->refresh()->load(['job', 'employer', 'freelancer', 'milestones']);
-
-        return $this->sendResponse(
-            new ContractResource($contract),
-            'Dispute raised successfully. An administrator has been notified to review the contract.'
-        );
-    }
-
-    /**
-     * Apply a guarded status transition to a contract.
-     */
-    private function changeStatus(Request $request, Contract $contract, string $newStatus): JsonResponse
-    {
-        $guard = $this->requireEmployer($request);
-        if ($guard) {
-            return $guard;
-        }
-
-        $contract = $this->loadOwnedContract($request, $contract);
-        if ($contract instanceof JsonResponse) {
-            return $contract;
-        }
-
-        $allowed = self::TRANSITIONS[$contract->status] ?? [];
-
-        if (!in_array($newStatus, $allowed, true)) {
-            return $this->sendError(
-                "Contract cannot transition from '{$contract->status}' to '{$newStatus}'.",
-                [],
-                422
-            );
-        }
-
-        DB::transaction(function () use ($contract, $newStatus) {
+        DB::transaction(function () use ($contract, $user, $request) {
             $contract->update([
-                'status' => $newStatus,
-                'end_date' => in_array($newStatus, ['completed', 'cancelled'], true)
-                    ? now()
-                    : $contract->end_date,
+                'status'     => Contract::STATUS_CANCELLED,
+                'end_date'   => now(),
             ]);
+
+            // Also reject the proposal
+            $contract->proposal()->update(['status' => 'rejected']);
+
+            // Reopen the job
+            $contract->job()->update(['status' => 'open']);
+
+            // Notify employer
+            NotificationService::contractDeclined(
+                $contract->employer_id,
+                $contract->title,
+                'employer',
+                $contract->id,
+                $request->input('reason')
+            );
+
+            AuditService::record(
+                $user,
+                'contract.declined',
+                'Contract',
+                $contract->id,
+                "Freelancer declined contract for \"{$contract->title}\"."
+            );
         });
 
-        $contract->refresh()->load(['job', 'employer', 'freelancer', 'milestones']);
-
-        // Broadcast real-time update
-        broadcast(new ContractUpdated($contract, 'status_change', [
-            'action' => 'contract_' . $newStatus,
-            'previous_status' => $contract->getOriginal('status'),
-        ]));
-
-        // Log activity
-        $actorId = $request->user()->id;
-        match ($newStatus) {
-            'paused' => ContractActivityService::contractPaused($contract, $actorId),
-            'active' => ContractActivityService::contractResumed($contract, $actorId),
-            'completed' => ContractActivityService::contractCompleted($contract, $actorId),
-            'cancelled' => ContractActivityService::contractCancelled($contract, $actorId),
-            default => null,
-        };
-
-        return $this->sendResponse(
-            new ContractResource($contract),
-            self::ACTION_MESSAGES[$newStatus]
-        );
-    }
-
-    /**
-     * Only employers and admins may manage a contract status transitions.
-     */
-    private function requireEmployer(Request $request): ?JsonResponse
-    {
-        $user = $request->user();
-
-        if ($user->role !== 'employer' && $user->role !== 'admin') {
-            return $this->sendForbidden('Only employers can manage contracts.');
-        }
-
-        return null;
-    }
-
-    /**
-     * Load a contract the authenticated user owns (or an admin may view).
-     * Prevents IDOR: ownership is checked through the relationship, not the URL id.
-     */
-    private function loadOwnedContract(Request $request, Contract $contract): Contract|JsonResponse
-    {
-        $user = $request->user();
-
-        $isOwner = $contract->employer_id === $user->id || $contract->freelancer_id === $user->id;
-
-        if (!$isOwner && $user->role !== 'admin') {
-            return $this->sendError('You do not have access to this contract.', [], 403);
-        }
-
-        return $contract->load(['job', 'employer', 'freelancer', 'milestones']);
+        return $this->sendResponse(null, 'Contract declined successfully.');
     }
 }

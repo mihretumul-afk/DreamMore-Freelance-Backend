@@ -2,33 +2,24 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Models\Wallet;
 use App\Models\Withdrawal;
-use App\Services\WithdrawalService;
+use App\Services\Payment\PaymentService;
+use App\Services\Payment\WithdrawalService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
-/**
- * WithdrawalController — freelancer-facing withdrawal endpoints.
- */
 class WithdrawalController extends BaseApiController
 {
     /**
-     * GET /withdrawals
-     * List the authenticated freelancer's withdrawals.
+     * List user's withdrawals.
      */
     public function index(Request $request): JsonResponse
     {
-        $user = $request->user();
-
-        $query = Withdrawal::where('user_id', $user->id)
-            ->with(['paymentMethod:id,type,display_label'])
-            ->orderByDesc('created_at');
-
-        if ($request->filled('status')) {
-            $query->where('status', $request->input('status'));
-        }
-
-        $withdrawals = $query->paginate(15);
+        $withdrawals = $request->user()
+            ->withdrawals()
+            ->orderByDesc('created_at')
+            ->paginate(15);
 
         return $this->sendResponse(
             $withdrawals->items(),
@@ -37,67 +28,99 @@ class WithdrawalController extends BaseApiController
             [
                 'current_page' => $withdrawals->currentPage(),
                 'last_page'    => $withdrawals->lastPage(),
-                'per_page'     => $withdrawals->perPage(),
                 'total'        => $withdrawals->total(),
             ]
         );
     }
 
     /**
-     * GET /withdrawals/{withdrawal}
-     * Show a single withdrawal detail.
+     * Request a withdrawal.
      */
-    public function show(Request $request, Withdrawal $withdrawal): JsonResponse
+    public function store(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'amount'            => 'required|numeric|min:1|max:999999.99',
+            'payment_method_id' => 'required|exists:payment_methods,id',
+        ]);
+
+        $paymentMethod = $request->user()->paymentMethods()->find($validated['payment_method_id']);
+        if (!$paymentMethod) {
+            return $this->sendForbidden('This payment method does not belong to you.');
+        }
+
+        try {
+            $service = app(WithdrawalService::class);
+            $withdrawal = $service->request(
+                $request->user()->id,
+                $validated['amount'],
+                $validated['payment_method_id']
+            );
+
+            $fee = (float) $withdrawal->fee;
+            $netAmount = (float) $withdrawal->net_amount;
+
+            return $this->sendResponse([
+                'id'         => $withdrawal->id,
+                'reference'  => $withdrawal->reference,
+                'amount'     => (float) $withdrawal->amount,
+                'fee'        => $fee,
+                'net_amount' => $netAmount,
+                'status'     => $withdrawal->status,
+            ], 'Withdrawal request submitted successfully.', 201);
+        } catch (\RuntimeException $e) {
+            return $this->sendError($e->getMessage(), [], 422);
+        }
+    }
+
+    /**
+     * Cancel a pending withdrawal.
+     */
+    public function cancel(Request $request, Withdrawal $withdrawal): JsonResponse
     {
         if ($withdrawal->user_id !== $request->user()->id) {
             return $this->sendForbidden('You do not have access to this withdrawal.');
         }
 
-        $withdrawal->load(['paymentMethod:id,type,display_label']);
-
-        return $this->sendResponse($withdrawal, 'Withdrawal retrieved.');
-    }
-
-    /**
-     * POST /withdrawals
-     * Request a new withdrawal.
-     */
-    public function store(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'amount'            => ['required', 'numeric', 'min:1'],
-            'payment_method_id' => ['nullable', 'integer', 'exists:payment_methods,id'],
-        ]);
-
         try {
-            $withdrawal = WithdrawalService::requestWithdrawal(
-                $request->user()->id,
-                (float) $validated['amount'],
-                $validated['payment_method_id'] ?? null,
-            );
+            $service = app(WithdrawalService::class);
+            $service->cancel($withdrawal, $request->user()->id);
+
+            return $this->sendResponse(null, 'Withdrawal cancelled successfully.');
         } catch (\RuntimeException $e) {
             return $this->sendError($e->getMessage(), [], 422);
         }
+    }
 
-        return $this->sendResponse(
-            $withdrawal->load('paymentMethod:id,type,display_label'),
-            'Withdrawal request submitted.',
-            201
+    /**
+     * Get user's wallet/earnings summary.
+     */
+    public function earnings(Request $request): JsonResponse
+    {
+        $wallet = Wallet::firstOrCreate(
+            ['user_id' => $request->user()->id],
+            ['currency' => 'ETB']
         );
-    }
 
-    /**
-     * POST /withdrawals/{withdrawal}/cancel
-     * Cancel a pending withdrawal request.
-     */
-    public function cancel(Request $request, Withdrawal $withdrawal): JsonResponse
-    {
-        try {
-            $cancelled = WithdrawalService::cancelWithdrawal($withdrawal, $request->user()->id);
-        } catch (\RuntimeException $e) {
-            return $this->sendError($e->getMessage(), [], 422);
-        }
+        $fee = WithdrawalService::calculateFee((float) $wallet->available_balance);
 
-        return $this->sendResponse($cancelled, 'Withdrawal cancelled.');
+        // Calculate totals from transactions
+        $totalWithdrawn = \App\Models\Transaction::where('user_id', $request->user()->id)
+            ->where('type', \App\Models\Transaction::TYPE_WITHDRAWAL)
+            ->where('direction', \App\Models\Transaction::DIR_DEBIT)
+            ->sum('amount');
+
+        $totalEarnings = \App\Models\Payment::where('payee_id', $request->user()->id)
+            ->where('type', \App\Models\Payment::TYPE_MILESTONE_RELEASED)
+            ->where('status', \App\Models\Payment::STATUS_COMPLETED)
+            ->sum('amount');
+
+        return $this->sendResponse([
+            'available_balance' => (float) $wallet->available_balance,
+            'pending_balance'   => (float) $wallet->pending_balance,
+            'total_earned'      => (float) $totalEarnings,
+            'total_withdrawn'   => (float) $totalWithdrawn,
+            'currency'          => $wallet->currency,
+            'estimated_fee'     => $fee,
+        ], 'Earnings retrieved.');
     }
 }

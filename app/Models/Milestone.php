@@ -6,101 +6,110 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Milestone extends Model
 {
     use HasFactory;
 
-    // Status constants
-    const STATUS_PENDING            = 'pending';
-    const STATUS_AWAITING_FUNDING   = 'awaiting_funding';
-    const STATUS_FUNDED             = 'funded';
-    const STATUS_IN_PROGRESS        = 'in_progress';
-    const STATUS_SUBMITTED          = 'submitted';
-    const STATUS_REVISION_REQUESTED = 'revision_requested';
-    const STATUS_APPROVED           = 'approved';
-    const STATUS_REJECTED           = 'rejected';
-    const STATUS_RELEASED           = 'released';
-    const STATUS_PAID               = 'paid';
-    const STATUS_DISPUTED           = 'disputed';
-    const STATUS_CANCELLED          = 'cancelled';
+    // ── Status constants ──────────────────────────────────────────────────
+    public const STATUS_DRAFT    = 'draft';
+    public const STATUS_UNFUNDED = 'unfunded';
+    public const STATUS_FUNDED   = 'funded';
+    public const STATUS_IN_PROGRESS = 'in_progress';
+    public const STATUS_SUBMITTED   = 'submitted';
+    public const STATUS_IN_REVIEW   = 'in_review';
+    public const STATUS_REVISION    = 'revision_requested';
+    public const STATUS_APPROVED    = 'approved';
+    public const STATUS_RELEASED    = 'released';
+    public const STATUS_DISPUTED    = 'disputed';
+    public const STATUS_CANCELLED   = 'cancelled';
 
     protected $fillable = [
         'contract_id',
         'title',
         'description',
+        'deliverables',
         'amount',
         'status',
         'due_date',
-        'funded_at',
+        'created_by',
         'submitted_at',
         'approved_at',
+        'accepted_at',
+        'started_at',
+        'funded_at',
         'released_at',
-        'escrow_funded_at',
-        'paid_at',
-        'sort_order',
-    ];
-
-    protected $attributes = [
-        'status' => self::STATUS_PENDING,
-        'sort_order' => 0,
     ];
 
     protected $casts = [
-        'amount'           => 'decimal:2',
-        'due_date'         => 'datetime',
-        'funded_at'        => 'datetime',
-        'submitted_at'     => 'datetime',
-        'approved_at'      => 'datetime',
-        'released_at'      => 'datetime',
-        'escrow_funded_at' => 'datetime',
-        'paid_at'          => 'datetime',
-        'sort_order'       => 'integer',
+        'amount'        => 'decimal:2',
+        'due_date'      => 'datetime',
+        'submitted_at'  => 'datetime',
+        'approved_at'   => 'datetime',
+        'accepted_at'   => 'datetime',
+        'started_at'    => 'datetime',
+        'funded_at'     => 'datetime',
+        'released_at'   => 'datetime',
     ];
+
+    protected $attributes = [
+        'status' => self::STATUS_DRAFT,
+    ];
+
+    // ── Relationships ─────────────────────────────────────────────────────
 
     public function contract(): BelongsTo
     {
         return $this->belongsTo(Contract::class);
     }
 
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
     public function submissions(): HasMany
     {
-        return $this->hasMany(MilestoneSubmission::class)->orderBy('created_at', 'desc');
+        return $this->hasMany(MilestoneSubmission::class)->orderByDesc('created_at');
     }
 
-    public function latestSubmission(): HasOne
+    // ── Helper methods ────────────────────────────────────────────────────
+
+    public function isDraft(): bool
     {
-        return $this->hasOne(MilestoneSubmission::class)->latestOfMany();
+        return $this->status === self::STATUS_DRAFT;
     }
 
-    public function attachments(): HasMany
+    public function isApproved(): bool
     {
-        return $this->hasMany(MilestoneAttachment::class);
+        return $this->status === self::STATUS_APPROVED;
     }
 
-    public function escrowTransactions(): HasMany
+    public function canStartWork(): bool
     {
-        return $this->hasMany(EscrowTransaction::class);
+        return $this->status === self::STATUS_FUNDED;
     }
 
-    public function disputes(): HasMany
+    public function canBeFunded(): bool
     {
-        return $this->hasMany(Dispute::class);
-    }
-
-    public function latestDispute(): HasOne
-    {
-        return $this->hasOne(Dispute::class)->latestOfMany();
-    }
-
-    public function isEscrowFunded(): bool
-    {
-        return $this->funded_at !== null || $this->escrow_funded_at !== null || in_array($this->status, ['funded', 'submitted', 'approved', 'released', 'paid'], true);
+        return $this->status === self::STATUS_DRAFT || $this->status === self::STATUS_UNFUNDED;
     }
 
     public function isFunded(): bool
     {
-        return $this->isEscrowFunded();
+        return $this->status === self::STATUS_FUNDED || $this->status === self::STATUS_IN_PROGRESS
+            || $this->status === self::STATUS_SUBMITTED || $this->status === self::STATUS_IN_REVIEW
+            || $this->status === self::STATUS_REVISION || $this->status === self::STATUS_APPROVED
+            || $this->status === self::STATUS_RELEASED;
+    }
+
+    public function canSubmitWork(): bool
+    {
+        return in_array($this->status, [self::STATUS_IN_PROGRESS, self::STATUS_REVISION], true);
+    }
+
+    public function canReview(): bool
+    {
+        return in_array($this->status, [self::STATUS_SUBMITTED, self::STATUS_IN_REVIEW], true);
     }
 }

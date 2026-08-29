@@ -91,9 +91,9 @@ class Job extends Model
         return $this->hasMany(Proposal::class);
     }
 
-    public function contract(): HasOne
+    public function contracts(): HasMany
     {
-        return $this->hasOne(Contract::class);
+        return $this->hasMany(Contract::class);
     }
 
     public function savedByUsers(): HasMany

@@ -34,13 +34,11 @@ class SecurityTest extends TestCase
 
     private Role $superAdminRole;
     private Role $supportAdminRole;
-    private Role $financeAdminRole;
     private Role $disputeAdminRole;
 
     private User $superAdmin;
     private User $superAdmin2;     // second super admin for last-account protection tests
     private User $supportAdmin;
-    private User $financeAdmin;
     private User $disputeAdmin;
     private User $freelancer;
     private User $employer;
@@ -52,13 +50,11 @@ class SecurityTest extends TestCase
 
         $this->superAdminRole  = Role::where('slug', Role::SUPER_ADMIN)->firstOrFail();
         $this->supportAdminRole = Role::where('slug', Role::SUPPORT_ADMIN)->firstOrFail();
-        $this->financeAdminRole = Role::where('slug', Role::FINANCE_ADMIN)->firstOrFail();
         $this->disputeAdminRole = Role::where('slug', Role::DISPUTE_ADMIN)->firstOrFail();
 
         $this->superAdmin  = $this->makeAdmin('sa@sec.test',       $this->superAdminRole);
         $this->superAdmin2  = $this->makeAdmin('sa2@sec.test',      $this->superAdminRole);
         $this->supportAdmin = $this->makeAdmin('support@sec.test',  $this->supportAdminRole);
-        $this->financeAdmin = $this->makeAdmin('finance@sec.test',  $this->financeAdminRole);
         $this->disputeAdmin = $this->makeAdmin('dispute@sec.test',  $this->disputeAdminRole);
 
         $this->freelancer = User::create([
@@ -155,55 +151,6 @@ class SecurityTest extends TestCase
             ->assertForbidden();
     }
 
-    // Finance Admin cannot touch user management beyond viewing.
-    public function test_finance_admin_can_view_users_but_cannot_suspend_them(): void
-    {
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->getJson('/api/v1/admin/users')
-            ->assertOk();
-
-        // users.suspend not granted to finance — should 403.
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->putJson("/api/v1/admin/users/{$this->freelancer->id}/status", [
-                'is_active' => false,
-            ])
-            ->assertForbidden();
-    }
-
-    // Finance Admin cannot access admin management.
-    public function test_finance_admin_cannot_access_admin_management(): void
-    {
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->getJson('/api/v1/admin/admins')
-            ->assertForbidden();
-
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->postJson('/api/v1/admin/admins', [
-                'name' => 'Sneaky', 'email' => 'sneaky@test.com', 'password' => 'Password1!',
-            ])
-            ->assertForbidden();
-    }
-
-    // Finance Admin cannot manage roles.
-    public function test_finance_admin_cannot_manage_roles(): void
-    {
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->getJson('/api/v1/admin/roles')
-            ->assertForbidden();
-
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->postJson('/api/v1/admin/roles', [
-                'slug' => 'finance_grab', 'name' => 'Finance Grab',
-            ])
-            ->assertForbidden();
-
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->putJson("/api/v1/admin/roles/{$this->financeAdminRole->id}/permissions", [
-                'permissions' => ['admins.create'],
-            ])
-            ->assertForbidden();
-    }
-
     // Dispute Admin cannot resolve disputes if only viewing.
     public function test_dispute_admin_can_resolve_disputes(): void
     {
@@ -248,7 +195,7 @@ class SecurityTest extends TestCase
 
     public function test_non_super_admin_cannot_create_any_custom_role(): void
     {
-        foreach ([$this->supportAdmin, $this->financeAdmin, $this->disputeAdmin] as $actor) {
+        foreach ([$this->supportAdmin, $this->disputeAdmin] as $actor) {
             $this->actingAs($actor, 'sanctum')
                 ->postJson('/api/v1/admin/roles', [
                     'slug' => 'evil_' . $actor->id,
@@ -268,7 +215,7 @@ class SecurityTest extends TestCase
             'is_system' => false, 'is_active' => true,
         ]);
 
-        foreach ([$this->supportAdmin, $this->financeAdmin, $this->disputeAdmin] as $actor) {
+        foreach ([$this->supportAdmin, $this->disputeAdmin] as $actor) {
             $this->actingAs($actor, 'sanctum')
                 ->deleteJson("/api/v1/admin/roles/{$customRole->id}")
                 ->assertForbidden();
@@ -282,7 +229,7 @@ class SecurityTest extends TestCase
 
     public function test_non_super_admin_cannot_sync_permissions_on_any_role(): void
     {
-        foreach ([$this->supportAdmin, $this->financeAdmin, $this->disputeAdmin] as $actor) {
+        foreach ([$this->supportAdmin, $this->disputeAdmin] as $actor) {
             $this->actingAs($actor, 'sanctum')
                 ->putJson("/api/v1/admin/roles/{$this->supportAdminRole->id}/permissions", [
                     'permissions' => ['admins.create', 'roles.delete'],
@@ -303,7 +250,7 @@ class SecurityTest extends TestCase
 
     public function test_system_role_name_cannot_be_changed(): void
     {
-        foreach ([$this->superAdminRole, $this->supportAdminRole, $this->financeAdminRole] as $role) {
+        foreach ([$this->superAdminRole, $this->supportAdminRole, $this->disputeAdminRole] as $role) {
             $this->actingAs($this->superAdmin, 'sanctum')
                 ->putJson("/api/v1/admin/roles/{$role->id}", ['name' => 'Hijacked'])
                 ->assertStatus(422);
@@ -314,21 +261,12 @@ class SecurityTest extends TestCase
     // C. Privilege escalation — permission management
     // ═══════════════════════════════════════════════════════════════════
 
-    public function test_support_admin_cannot_grant_themselves_payment_permissions(): void
+    public function test_support_admin_cannot_grant_themselves_admin_permissions(): void
     {
-        // Support Admin tries to add payments.refund to their own role.
+        // Support Admin tries to add admins.create to their own role.
         $this->actingAs($this->supportAdmin, 'sanctum')
             ->putJson("/api/v1/admin/roles/{$this->supportAdminRole->id}/permissions", [
-                'permissions' => ['payments.refund', 'users.view'],
-            ])
-            ->assertForbidden();
-    }
-
-    public function test_finance_admin_cannot_grant_themselves_admin_permissions(): void
-    {
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->putJson("/api/v1/admin/roles/{$this->financeAdminRole->id}/permissions", [
-                'permissions' => ['admins.create', 'payments.view'],
+                'permissions' => ['admins.create', 'users.view'],
             ])
             ->assertForbidden();
     }
@@ -351,7 +289,7 @@ class SecurityTest extends TestCase
             ->assertOk();
 
         // Non-super-admins without roles.view get 403.
-        $this->actingAs($this->financeAdmin, 'sanctum')
+        $this->actingAs($this->disputeAdmin, 'sanctum')
             ->getJson('/api/v1/admin/permissions')
             ->assertForbidden();
     }
@@ -365,15 +303,6 @@ class SecurityTest extends TestCase
         $this->actingAs($this->supportAdmin, 'sanctum')
             ->postJson('/api/v1/admin/admins', [
                 'name' => 'Rogue', 'email' => 'rogue@test.com', 'password' => 'Password1!',
-            ])
-            ->assertForbidden();
-    }
-
-    public function test_finance_admin_cannot_create_new_admin(): void
-    {
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->postJson('/api/v1/admin/admins', [
-                'name' => 'Rogue', 'email' => 'rogue2@test.com', 'password' => 'Password1!',
             ])
             ->assertForbidden();
     }
@@ -404,7 +333,7 @@ class SecurityTest extends TestCase
 
     public function test_non_super_admin_cannot_assign_roles_to_admins(): void
     {
-        foreach ([$this->supportAdmin, $this->financeAdmin, $this->disputeAdmin] as $actor) {
+        foreach ([$this->supportAdmin, $this->disputeAdmin] as $actor) {
             $this->actingAs($actor, 'sanctum')
                 ->putJson("/api/v1/admin/admins/{$this->supportAdmin->id}/roles", [
                     'roles' => [Role::SUPER_ADMIN],
@@ -418,7 +347,7 @@ class SecurityTest extends TestCase
         // Create a throwaway admin.
         $victim = $this->makeAdmin('victim@test.com', $this->supportAdminRole);
 
-        foreach ([$this->supportAdmin, $this->financeAdmin, $this->disputeAdmin] as $actor) {
+        foreach ([$this->supportAdmin, $this->disputeAdmin] as $actor) {
             $this->actingAs($actor, 'sanctum')
                 ->deleteJson("/api/v1/admin/admins/{$victim->id}")
                 ->assertForbidden();
@@ -432,7 +361,7 @@ class SecurityTest extends TestCase
     {
         $victim = $this->makeAdmin('victim2@test.com', $this->supportAdminRole);
 
-        foreach ([$this->financeAdmin, $this->disputeAdmin] as $actor) {
+        foreach ([$this->disputeAdmin] as $actor) {
             $this->actingAs($actor, 'sanctum')
                 ->putJson("/api/v1/admin/admins/{$victim->id}/status", ['is_active' => false])
                 ->assertForbidden();
@@ -563,22 +492,6 @@ class SecurityTest extends TestCase
      * Finance admin directly calls role-sync endpoint — should 403 regardless
      * of the permissions array sent in the body.
      */
-    public function test_finance_admin_direct_api_call_to_sync_permissions_still_returns_403(): void
-    {
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->putJson("/api/v1/admin/roles/{$this->financeAdminRole->id}/permissions", [
-                'permissions' => [
-                    'admins.create', 'admins.edit', 'roles.create', 'roles.delete',
-                ],
-            ])
-            ->assertForbidden();
-
-        // Confirm no permissions were added.
-        $this->assertFalse(
-            $this->financeAdminRole->fresh()->hasPermission('admins.create')
-        );
-    }
-
     /**
      * Dispute admin tries to directly call the admin status endpoint.
      */
@@ -690,7 +603,7 @@ class SecurityTest extends TestCase
             'is_system' => false, 'is_active' => true,
         ]);
 
-        foreach ([$this->supportAdmin, $this->financeAdmin, $this->disputeAdmin] as $actor) {
+        foreach ([$this->supportAdmin, $this->disputeAdmin] as $actor) {
             $this->actingAs($actor, 'sanctum')
                 ->deleteJson("/api/v1/admin/roles/{$customRole->id}")
                 ->assertForbidden();

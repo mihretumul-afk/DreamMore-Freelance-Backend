@@ -31,14 +31,12 @@ class RbacTest extends TestCase
 
     private Role $superAdminRole;
     private Role $supportAdminRole;
-    private Role $financeAdminRole;
     private Role $disputeAdminRole;
 
     // ── Users ────────────────────────────────────────────────────────────
 
     private User $superAdmin;
     private User $supportAdmin;
-    private User $financeAdmin;
     private User $disputeAdmin;
     private User $freelancer;
     private User $employer;
@@ -61,7 +59,6 @@ class RbacTest extends TestCase
 
         $this->superAdminRole  = Role::where('slug', Role::SUPER_ADMIN)->firstOrFail();
         $this->supportAdminRole = Role::where('slug', Role::SUPPORT_ADMIN)->firstOrFail();
-        $this->financeAdminRole = Role::where('slug', Role::FINANCE_ADMIN)->firstOrFail();
         $this->disputeAdminRole = Role::where('slug', Role::DISPUTE_ADMIN)->firstOrFail();
     }
 
@@ -87,7 +84,6 @@ class RbacTest extends TestCase
     {
         $this->superAdmin  = $this->makeAdmin('super@test.com',   $this->superAdminRole);
         $this->supportAdmin = $this->makeAdmin('support@test.com', $this->supportAdminRole);
-        $this->financeAdmin = $this->makeAdmin('finance@test.com', $this->financeAdminRole);
         $this->disputeAdmin = $this->makeAdmin('dispute@test.com', $this->disputeAdminRole);
 
         $this->freelancer = User::create([
@@ -253,65 +249,7 @@ class RbacTest extends TestCase
             ->assertForbidden();
     }
 
-    // ── 3. Finance Admin — payments/milestones/transactions ──────────────
-
-    public function test_finance_admin_can_view_users(): void
-    {
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->getJson('/api/v1/admin/users')
-            ->assertOk();
-    }
-
-    public function test_finance_admin_cannot_manage_admins(): void
-    {
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->getJson('/api/v1/admin/admins')
-            ->assertForbidden();
-    }
-
-    public function test_finance_admin_cannot_create_roles(): void
-    {
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->postJson('/api/v1/admin/roles', [
-                'slug' => 'finance_custom',
-                'name' => 'Finance Custom',
-            ])
-            ->assertForbidden();
-    }
-
-    public function test_finance_admin_cannot_sync_role_permissions(): void
-    {
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->putJson("/api/v1/admin/roles/{$this->financeAdminRole->id}/permissions", [
-                'permissions' => ['admins.create'],
-            ])
-            ->assertForbidden();
-    }
-
-    public function test_finance_admin_cannot_resolve_disputes(): void
-    {
-        // Create a real report so model binding doesn't 404 before permission check.
-        $report = \App\Models\Report::create([
-            'reporter_id' => $this->freelancer->id,
-            'target_type' => 'job',
-            'target_id'   => 1,
-            'reason'      => 'Spam',
-            'status'      => 'pending',
-        ]);
-
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->putJson("/api/v1/admin/reports/{$report->id}/resolve", ['resolution' => 'done'])
-            ->assertForbidden();
-    }
-
-    public function test_finance_admin_can_view_settings(): void
-    {
-        $this->actingAs($this->financeAdmin, 'sanctum')
-            ->getJson('/api/v1/admin/settings')
-            ->assertOk();
-    }
-
-    // ── 4. Dispute Admin — disputes only ─────────────────────────────────
+    // ── 3. Dispute Admin — disputes only ─────────────────────────────────
 
     public function test_dispute_admin_can_view_reports(): void
     {
@@ -460,9 +398,9 @@ class RbacTest extends TestCase
 
     public function test_non_super_admin_cannot_assign_super_admin_role(): void
     {
-        // supportAdmin tries to make financeAdmin a super admin
+        // supportAdmin tries to make disputeAdmin a super admin
         $this->actingAs($this->supportAdmin, 'sanctum')
-            ->putJson("/api/v1/admin/admins/{$this->financeAdmin->id}/roles", [
+            ->putJson("/api/v1/admin/admins/{$this->disputeAdmin->id}/roles", [
                 'roles' => [Role::SUPER_ADMIN],
             ])
             ->assertForbidden();
@@ -880,14 +818,12 @@ class RbacTest extends TestCase
     {
         $this->assertTrue($this->superAdmin->isSuperAdmin());
         $this->assertFalse($this->supportAdmin->isSuperAdmin());
-        $this->assertFalse($this->financeAdmin->isSuperAdmin());
         $this->assertFalse($this->disputeAdmin->isSuperAdmin());
     }
 
     public function test_super_admin_has_all_permissions(): void
     {
         $this->assertTrue($this->superAdmin->hasPermission('admins.create'));
-        $this->assertTrue($this->superAdmin->hasPermission('payments.refund'));
         $this->assertTrue($this->superAdmin->hasPermission('roles.delete'));
         $this->assertTrue($this->superAdmin->hasPermission('audit_logs.view'));
     }
@@ -896,18 +832,8 @@ class RbacTest extends TestCase
     {
         $this->assertTrue($this->supportAdmin->hasPermission('users.view'));
         $this->assertTrue($this->supportAdmin->hasPermission('disputes.resolve'));
-        $this->assertFalse($this->supportAdmin->hasPermission('payments.refund'));
         $this->assertFalse($this->supportAdmin->hasPermission('admins.create'));
         $this->assertFalse($this->supportAdmin->hasPermission('roles.create'));
-    }
-
-    public function test_finance_admin_has_expected_permissions(): void
-    {
-        $this->assertTrue($this->financeAdmin->hasPermission('payments.view'));
-        $this->assertTrue($this->financeAdmin->hasPermission('payments.refund'));
-        $this->assertTrue($this->financeAdmin->hasPermission('transactions.export'));
-        $this->assertFalse($this->financeAdmin->hasPermission('admins.create'));
-        $this->assertFalse($this->financeAdmin->hasPermission('disputes.resolve'));
     }
 
     public function test_dispute_admin_has_expected_permissions(): void
@@ -915,7 +841,6 @@ class RbacTest extends TestCase
         $this->assertTrue($this->disputeAdmin->hasPermission('disputes.view'));
         $this->assertTrue($this->disputeAdmin->hasPermission('disputes.resolve'));
         $this->assertTrue($this->disputeAdmin->hasPermission('disputes.escalate'));
-        $this->assertFalse($this->disputeAdmin->hasPermission('payments.refund'));
         $this->assertFalse($this->disputeAdmin->hasPermission('admins.create'));
     }
 
@@ -928,13 +853,13 @@ class RbacTest extends TestCase
 
     public function test_has_any_permission(): void
     {
-        $this->assertTrue($this->supportAdmin->hasAnyPermission('payments.refund', 'users.view'));
-        $this->assertFalse($this->supportAdmin->hasAnyPermission('payments.refund', 'admins.create'));
+        $this->assertTrue($this->supportAdmin->hasAnyPermission('disputes.resolve', 'users.view'));
+        $this->assertFalse($this->supportAdmin->hasAnyPermission('admins.create', 'roles.create'));
     }
 
     public function test_has_all_permissions(): void
     {
-        $this->assertTrue($this->financeAdmin->hasAllPermissions('payments.view', 'payments.refund'));
-        $this->assertFalse($this->financeAdmin->hasAllPermissions('payments.view', 'admins.create'));
+        $this->assertTrue($this->supportAdmin->hasAllPermissions('users.view', 'disputes.resolve'));
+        $this->assertFalse($this->supportAdmin->hasAllPermissions('users.view', 'admins.create'));
     }
 }

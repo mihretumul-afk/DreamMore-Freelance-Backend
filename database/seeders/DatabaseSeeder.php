@@ -18,7 +18,6 @@ class DatabaseSeeder extends Seeder
             UserSeeder::class,
             JobSeeder::class,
             RbacSeeder::class,
-            WalletSeeder::class,
         ]);
     }
 }

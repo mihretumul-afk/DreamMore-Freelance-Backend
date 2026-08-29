@@ -31,25 +31,17 @@ class RbacSeeder extends Seeder
         'jobs.delete'   => ['Delete Jobs',   'jobs', 'Permanently remove job postings'],
         'jobs.moderate' => ['Moderate Jobs', 'jobs', 'Change the status of any job posting'],
 
-        // ── Payments ─────────────────────────────────────────────────────
-        'payments.view'    => ['View Payments',    'payments', 'View payment records and history'],
-        'payments.verify'  => ['Verify Payments',  'payments', 'Mark payments as verified'],
-        'payments.process' => ['Process Payments', 'payments', 'Initiate or approve payment processing'],
-        'payments.refund'  => ['Refund Payments',  'payments', 'Issue refunds to users'],
-
-        // ── Milestones ────────────────────────────────────────────────────
-        'milestones.view'    => ['View Milestones',    'milestones', 'View milestone details and submissions'],
-        'milestones.create'  => ['Create Milestones',  'milestones', 'Create milestones on contracts'],
-        'milestones.fund'    => ['Fund Milestones',    'milestones', 'Allocate funds to milestones'],
-        'milestones.release' => ['Release Milestones', 'milestones', 'Release milestone payments to freelancers'],
-
-        // ── Transactions ──────────────────────────────────────────────────
-        'transactions.view'   => ['View Transactions',   'transactions', 'View transaction history'],
-        'transactions.export' => ['Export Transactions', 'transactions', 'Export transaction data to CSV/Excel'],
-
-        // ── Withdrawals ──────────────────────────────────────────────────
-        'withdrawals.view'    => ['View Withdrawals',    'withdrawals', 'View withdrawal requests and history'],
-        'withdrawals.manage'  => ['Manage Withdrawals',  'withdrawals', 'Process, complete, or fail withdrawal requests'],
+        // ── Financial ──────────────────────────────────────────────────────
+        'payments.view'      => ['View Payments',      'finance', 'View payment records and history'],
+        'payments.process'   => ['Process Payments',   'finance', 'Process and verify payments'],
+        'payments.refund'    => ['Refund Payments',    'finance', 'Issue refunds to users'],
+        'milestones.fund'    => ['Fund Milestones',    'finance', 'Fund milestones with escrow'],
+        'milestones.release' => ['Release Milestones', 'finance', 'Release milestone payments'],
+        'transactions.view'  => ['View Transactions',  'finance', 'View financial transaction ledger'],
+        'withdrawals.view'   => ['View Withdrawals',   'finance', 'View withdrawal requests'],
+        'withdrawals.manage' => ['Manage Withdrawals', 'finance', 'Process withdrawal requests'],
+        'finance.view'       => ['View Finance',       'finance', 'View finance dashboard and reports'],
+        'finance.manage'     => ['Manage Finance',     'finance', 'Manage payment settings and fees'],
 
         // ── Disputes ──────────────────────────────────────────────────────
         'disputes.view'     => ['View Disputes',     'disputes', 'View reported disputes and reports'],
@@ -121,20 +113,20 @@ class RbacSeeder extends Seeder
 
         Role::FINANCE_ADMIN => [
             'name'        => 'Finance Admin',
-            'description' => 'Manages payments, milestones, transactions, and withdrawals. Cannot manage admins or roles.',
+            'description' => 'Manages payments, withdrawals, and financial operations. Cannot manage admins or roles.',
             'permissions' => [
                 'users.view',
                 'payments.view',
-                'payments.verify',
                 'payments.process',
                 'payments.refund',
                 'milestones.view',
                 'milestones.fund',
                 'milestones.release',
                 'transactions.view',
-                'transactions.export',
                 'withdrawals.view',
                 'withdrawals.manage',
+                'finance.view',
+                'finance.manage',
                 'audit_logs.view',
                 'settings.view',
                 'admin_account.view',
@@ -144,11 +136,10 @@ class RbacSeeder extends Seeder
 
         Role::DISPUTE_ADMIN => [
             'name'        => 'Dispute Admin',
-            'description' => 'Specialises in dispute resolution. Can review, resolve and escalate disputes. Cannot manage admins, roles, or finance.',
+            'description' => 'Specialises in dispute resolution. Can review, resolve and escalate disputes. Cannot manage admins or roles.',
             'permissions' => [
                 'users.view',
                 'jobs.view',
-                'milestones.view',
                 'disputes.view',
                 'disputes.review',
                 'disputes.resolve',
