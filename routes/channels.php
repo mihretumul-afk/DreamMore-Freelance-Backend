@@ -40,3 +40,12 @@ Broadcast::channel('contract.{contractId}', function ($user, $contractId) {
 Broadcast::channel('contract.{userId}', function ($user, $userId) {
     return (int) $user->id === (int) $userId;
 });
+
+// Admin channels — only admins can listen.
+Broadcast::channel('admin.finance', function ($user) {
+    return $user->role === 'admin';
+});
+
+Broadcast::channel('admin.credentials', function ($user) {
+    return $user->role === 'admin';
+});

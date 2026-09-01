@@ -41,14 +41,6 @@ class VerificationSubmissionController extends BaseApiController
             'status' => 'pending',
         ]);
 
-        // Notify admins of new verification submission
-        NotificationService::notifyAdmins(
-            'admin_verification_submitted',
-            'New Verification Request',
-            "User {$user->name} ({$user->role}) submitted {$validated['type']} verification documents for review.",
-            '/admin/verifications'
-        );
-
         return $this->sendResponse($verification, 'Verification documents submitted successfully.', 201);
     }
 

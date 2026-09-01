@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Events\CredentialSubmitted;
 use App\Models\Credential;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -195,13 +197,20 @@ class CredentialController extends BaseApiController
         ]);
 
         if ($testRequired) {
-            \App\Models\Notification::create([
-                'user_id' => $user->id,
-                'type' => 'skill_test_required',
-                'title' => 'Skill Assessment Required',
-                'message' => "A skill assessment is required for your credential '{$credential->title}' before it can be verified.",
-                'link' => '/freelancer/credentials',
-            ]);
+            NotificationService::skillTestRequired($user->id, $credential->title, 'Skill Assessment');
+        }
+
+        // Notify all admins about new credential submission (unless auto-verified)
+        if ($status !== 'approved') {
+            NotificationService::notifyAdmins(
+                'credential_submitted',
+                'New Credential Submitted',
+                "{$user->name} submitted credential '{$credential->title}' ({$credential->type}) for review.",
+                '/admin/verifications?type=credential&status=pending'
+            );
+
+            // Broadcast real-time event to admin dashboard
+            broadcast(new CredentialSubmitted($credential, $user->name));
         }
 
         return $this->sendResponse($credential, 'Credential submitted successfully for verification.', 201);
@@ -295,6 +304,14 @@ class CredentialController extends BaseApiController
         $updateData['reviewed_at'] = null;
 
         $credential->update($updateData);
+
+        // Notify admins about credential resubmission
+        NotificationService::notifyAdmins(
+            'credential_resubmitted',
+            'Credential Resubmitted',
+            "{$user->name} resubmitted credential '{$credential->title}' for review after previous {$credential->status} status.",
+            '/admin/verifications?type=credential&status=pending'
+        );
 
         return $this->sendResponse($credential->fresh(), 'Credential resubmitted for verification successfully.');
     }

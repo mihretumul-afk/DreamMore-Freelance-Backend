@@ -48,7 +48,7 @@ class EmployerBudget extends Model
         $startOfMonth = now()->startOfMonth();
 
         return (float) Payment::where('payer_id', $this->user_id)
-            ->where('type', Payment::TYPE_MILESTONE_RELEASED)
+            ->where('type', Payment::TYPE_ESCROW_FUNDED)
             ->where('status', Payment::STATUS_COMPLETED)
             ->where('created_at', '>=', $startOfMonth)
             ->sum('amount');

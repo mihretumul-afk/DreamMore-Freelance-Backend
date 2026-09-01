@@ -85,9 +85,10 @@ class PaymentService
 
             $amount = (float) $milestone->amount;
             $reference = Payment::generateReference();
-            $fees = self::calculateFees($amount);
 
-            // Create payment record
+            // Create payment record — fees are NOT calculated at funding time.
+            // The full amount is held in escrow. Fees are calculated only when
+            // funds are released to the freelancer upon approval.
             $payment = Payment::create([
                 'reference'          => $reference,
                 'payer_id'           => $employerId,
@@ -95,9 +96,9 @@ class PaymentService
                 'payment_method_id'  => $paymentMethodId,
                 'type'               => Payment::TYPE_ESCROW_FUNDED,
                 'amount'             => $amount,
-                'platform_fee'       => $fees['platform_fee'],
-                'processing_fee'     => $fees['processing_fee'],
-                'net_amount'         => $fees['net_amount'],
+                'platform_fee'       => 0,
+                'processing_fee'     => 0,
+                'net_amount'         => $amount,
                 'currency'           => 'ETB',
                 'status'             => Payment::STATUS_PENDING,
             ]);
@@ -130,9 +131,8 @@ class PaymentService
             // Update milestone status
             $milestone->update(['status' => Milestone::STATUS_FUNDED, 'funded_at' => now()]);
 
-            // Record ledger transactions
-            $this->recordLedgerTransaction($employerId, $fees['platform_fee'], Transaction::DIR_DEBIT, Transaction::TYPE_PLATFORM_FEE, $payment->id, "Platform fee for milestone \"{$milestone->title}\"");
-            $this->recordLedgerTransaction($employerId, $fees['processing_fee'], Transaction::DIR_DEBIT, Transaction::TYPE_PROCESSING_FEE, $payment->id, "Processing fee for milestone \"{$milestone->title}\"");
+            // Record ledger transaction — full amount held in escrow, no fees yet
+            $this->recordLedgerTransaction($employerId, $amount, Transaction::DIR_DEBIT, Transaction::TYPE_FUNDS_HELD, $payment->id, "Funds held in escrow for milestone \"{$milestone->title}\"");
 
             // Audit log
             AuditService::milestoneFunded($milestone->id, $employerId, [
@@ -201,11 +201,24 @@ class PaymentService
             }
 
             $freelancerId = $contract->freelancer_id;
-            $releaseAmount = (float) $payment->net_amount; // Release net amount after fees
+            $grossAmount = (float) $payment->amount;
 
-            // Credit freelancer wallet
+            // Calculate platform fee at release time (not at funding time)
+            $fees = self::calculateFees($grossAmount);
+            $platformFee = $fees['platform_fee'];
+            $processingFee = $fees['processing_fee'];
+            $releaseAmount = round($grossAmount - $platformFee, 2); // Freelancer gets gross minus platform fee
+
+            // Credit freelancer wallet with net amount
             $wallet = Wallet::forUser($freelancerId);
             $wallet->creditAvailable($releaseAmount);
+
+            // Update the original escrow payment with actual fees (for record-keeping)
+            $payment->update([
+                'platform_fee'   => $platformFee,
+                'processing_fee' => $processingFee,
+                'net_amount'     => $releaseAmount,
+            ]);
 
             // Create release payment record
             $releasePayment = Payment::create([
@@ -215,7 +228,7 @@ class PaymentService
                 'milestone_id'       => $milestone->id,
                 'type'               => Payment::TYPE_MILESTONE_RELEASED,
                 'amount'             => $releaseAmount,
-                'platform_fee'       => 0,
+                'platform_fee'       => $platformFee,
                 'processing_fee'     => 0,
                 'net_amount'         => $releaseAmount,
                 'currency'           => 'ETB',
@@ -223,8 +236,13 @@ class PaymentService
                 'processed_at'       => now(),
             ]);
 
-            // Record ledger transaction for release
+            // Record ledger transaction — freelancer receives net amount
             $this->recordLedgerTransaction($freelancerId, $releaseAmount, Transaction::DIR_CREDIT, Transaction::TYPE_FUNDS_RELEASED, $releasePayment->id, "Funds released for milestone \"{$milestone->title}\"");
+
+            // Record platform fee deduction for freelancer visibility
+            if ($platformFee > 0) {
+                $this->recordLedgerTransaction($freelancerId, $platformFee, Transaction::DIR_DEBIT, Transaction::TYPE_PLATFORM_FEE, $releasePayment->id, "Platform fee deducted for milestone \"{$milestone->title}\"");
+            }
 
             // Update milestone status
             $milestone->update([

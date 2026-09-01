@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Credential;
+use App\Models\FreelancerProfile;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -115,6 +116,9 @@ class LmsVerificationService
             $data['certificate_id']
         );
 
+        // 6. Auto-promote freelancer profile to approved so they appear on the marketplace
+        self::maybePromoteFreelancerProfile($user->id);
+
         Log::info("LMS certificate verified for user {$user->id}: {$data['certificate_id']}");
 
         return $credential;
@@ -173,5 +177,36 @@ class LmsVerificationService
                 $query->where('skill_id', $skillId);
             })
             ->exists();
+    }
+
+    /**
+     * If the freelancer has at least one approved credential,
+     * promote their profile from 'pending' to 'approved' so they appear
+     * on the public marketplace.
+     */
+    private static function maybePromoteFreelancerProfile(int $userId): void
+    {
+        $profile = FreelancerProfile::where('user_id', $userId)->first();
+
+        if (! $profile || $profile->approval_status === 'approved') {
+            return;
+        }
+
+        $user = $profile->user;
+
+        if ($user && $user->hasApprovedCredentials()) {
+            $profile->update([
+                'approval_status' => 'approved',
+                'approved_at'     => now(),
+                'rejection_reason' => null,
+            ]);
+
+            // Ensure the user account is active
+            if ($user->status !== 'active') {
+                $user->update(['status' => 'active']);
+            }
+
+            NotificationService::freelancerApproved($userId);
+        }
     }
 }

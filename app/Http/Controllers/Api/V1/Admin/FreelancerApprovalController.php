@@ -5,6 +5,10 @@ namespace App\Http\Controllers\Api\V1\Admin;
 use App\Http\Controllers\Api\V1\BaseApiController;
 use App\Models\FreelancerProfile;
 use App\Models\User;
+use App\Models\Verification;
+use App\Models\Credential;
+use App\Models\PortfolioItem;
+use App\Models\Review;
 use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +25,7 @@ class FreelancerApprovalController extends BaseApiController
         $request->validate([
             'status' => ['nullable', 'string', 'in:pending,approved,rejected'],
             'search' => ['nullable', 'string', 'max:255'],
+            'user_id' => ['nullable', 'integer'],
         ]);
 
         $query = FreelancerProfile::with(['user', 'skills'])
@@ -28,6 +33,10 @@ class FreelancerApprovalController extends BaseApiController
 
         if ($request->filled('status')) {
             $query->where('approval_status', $request->input('status'));
+        }
+
+        if ($request->filled('user_id')) {
+            $query->where('user_id', $request->input('user_id'));
         }
 
         if ($request->filled('search')) {
@@ -57,13 +66,46 @@ class FreelancerApprovalController extends BaseApiController
     /**
      * GET /api/v1/admin/freelancers/{freelancer}
      *
-     * View a single freelancer's profile and approval status.
+     * View a single freelancer's full profile for admin review.
      */
     public function show(FreelancerProfile $freelancer): JsonResponse
     {
         $freelancer->load(['user', 'skills']);
 
-        return $this->sendResponse($freelancer, 'Freelancer retrieved successfully.');
+        // Gather all related data for comprehensive admin review
+        $userId = $freelancer->user_id;
+
+        // Verification submissions
+        $verifications = Verification::where('user_id', $userId)
+            ->orderByDesc('created_at')
+            ->get();
+
+        // Verified / approved credentials
+        $credentials = Credential::where('user_id', $userId)
+            ->orderByDesc('created_at')
+            ->get();
+
+        // Portfolio items
+        $portfolio = PortfolioItem::where('user_id', $userId)
+            ->with(['category:id,name,slug', 'skill:id,name,slug'])
+            ->orderBy('display_order')
+            ->orderByDesc('created_at')
+            ->get();
+
+        // Reviews received
+        $reviews = Review::where('reviewee_id', $userId)
+            ->with(['reviewer:id,name,avatar'])
+            ->orderByDesc('created_at')
+            ->get();
+
+        return $this->sendResponse([
+            'profile' => $freelancer,
+            'verifications' => $verifications,
+            'credentials' => $credentials,
+            'portfolio' => $portfolio,
+            'reviews' => $reviews,
+            'review_count' => $reviews->count(),
+        ], 'Freelancer details retrieved successfully.');
     }
 
     /**
@@ -78,6 +120,11 @@ class FreelancerApprovalController extends BaseApiController
         }
 
         $freelancer->approve();
+
+        // Ensure the user account is active so they appear on the public marketplace
+        if ($freelancer->user && $freelancer->user->status !== 'active') {
+            $freelancer->user->update(['status' => 'active']);
+        }
 
         // Notify the freelancer
         NotificationService::freelancerApproved($freelancer->user_id);

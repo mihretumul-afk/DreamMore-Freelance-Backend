@@ -4,9 +4,10 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Api\V1\BaseApiController;
 use App\Models\Credential;
-use App\Models\Notification;
+use App\Models\FreelancerProfile;
 use App\Models\Verification;
 use App\Services\AuditService;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -110,28 +111,32 @@ class VerificationController extends BaseApiController
         return $this->sendResponse($credential, 'Credential retrieved successfully.');
     }
 
-    public function downloadCredential(Credential $credential): StreamedResponse|JsonResponse
+    public function downloadCredential(Credential $credential)
     {
-        $disk = Storage::disk('private')->exists($credential->file_path)
-            ? Storage::disk('private')
-            : (Storage::disk('local')->exists($credential->file_path)
-                ? Storage::disk('local')
-                : (Storage::disk('public')->exists($credential->file_path) ? Storage::disk('public') : null));
+        if (empty($credential->file_path)) {
+            return response()->json(['message' => 'No file attached to this credential.'], 404);
+        }
 
-        if (!$disk) {
-            if (Storage::disk('local')->exists('private/' . $credential->file_path)) {
-                return Storage::disk('local')->download(
-                    'private/' . $credential->file_path,
+        // Try each disk in order: private → local → public
+        $disks = ['private', 'local', 'public'];
+        foreach ($disks as $diskName) {
+            if (Storage::disk($diskName)->exists($credential->file_path)) {
+                return Storage::disk($diskName)->download(
+                    $credential->file_path,
                     $credential->file_original_name ?? basename($credential->file_path)
                 );
             }
-            return $this->sendError('Credential file not found.', [], 404);
         }
 
-        return $disk->download(
-            $credential->file_path,
-            $credential->file_original_name ?? basename($credential->file_path)
-        );
+        // Fallback: check nested private/ prefix
+        if (Storage::disk('local')->exists('private/' . $credential->file_path)) {
+            return Storage::disk('local')->download(
+                'private/' . $credential->file_path,
+                $credential->file_original_name ?? basename($credential->file_path)
+            );
+        }
+
+        return response()->json(['message' => 'Credential file not found on server.'], 404);
     }
 
     public function approve(Request $request, Verification $verification): JsonResponse
@@ -158,6 +163,9 @@ class VerificationController extends BaseApiController
                 $verification->user->role ?? 'freelancer'
             );
         }
+
+        // Auto-promote freelancer profile to approved so they appear on the marketplace
+        $this->maybePromoteFreelancerProfile($verification->user_id);
 
         // Audit log.
         AuditService::verificationApproved($verification->id, $admin->id, [
@@ -238,13 +246,13 @@ class VerificationController extends BaseApiController
 
         $credential->update($updateData);
 
-        Notification::create([
-            'user_id' => $credential->user_id,
-            'type'    => 'credential_approved',
-            'title'   => 'Credential Approved',
-            'message' => "Your credential '{$credential->title}' has been approved.",
-            'link'    => '/freelancer/credentials',
-        ]);
+        NotificationService::credentialApproved(
+            $credential->user_id,
+            $credential->title
+        );
+
+        // Auto-promote freelancer profile to approved so they appear on the marketplace
+        $this->maybePromoteFreelancerProfile($credential->user_id);
 
         // Audit log.
         AuditService::credentialApproved($credential->id, $admin->id, [
@@ -276,14 +284,11 @@ class VerificationController extends BaseApiController
             'reviewed_at'      => now(),
         ]);
 
-        Notification::create([
-            'user_id' => $credential->user_id,
-            'type'    => 'credential_rejected',
-            'title'   => 'Credential Rejected',
-            'message' => "Your credential '{$credential->title}' has been rejected."
-                . ($request->input('reason') ? " Reason: {$request->input('reason')}" : ''),
-            'link'    => '/freelancer/profile',
-        ]);
+        NotificationService::credentialRejected(
+            $credential->user_id,
+            $credential->title,
+            $request->input('reason')
+        );
 
         // Audit log.
         AuditService::credentialRejected($credential->id, $admin->id, [
@@ -316,13 +321,13 @@ class VerificationController extends BaseApiController
             'reviewed_at'      => now(),
         ]);
 
-        Notification::create([
-            'user_id' => $credential->user_id,
-            'type'    => 'credential_resubmission_required',
-            'title'   => 'Credential Resubmission Required',
-            'message' => "Resubmission required for credential '{$credential->title}'. Reason: {$request->input('reason')}",
-            'link'    => '/freelancer/credentials',
-        ]);
+        NotificationService::create(
+            $credential->user_id,
+            'credential_resubmission_required',
+            'Credential Resubmission Required',
+            "Resubmission required for credential '{$credential->title}'. Reason: {$request->input('reason')}",
+            '/freelancer/credentials'
+        );
 
         // Audit log.
         AuditService::credentialResubmissionRequested($credential->id, $admin->id, [
@@ -336,5 +341,36 @@ class VerificationController extends BaseApiController
             $credential->fresh()->load(['user', 'reviewer']),
             'Resubmission requested successfully.'
         );
+    }
+
+    /**
+     * If the freelancer has at least one approved credential or verification,
+     * promote their profile from 'pending' to 'approved' so they appear
+     * on the public marketplace.
+     */
+    private function maybePromoteFreelancerProfile(int $userId): void
+    {
+        $profile = FreelancerProfile::where('user_id', $userId)->first();
+
+        if (! $profile || $profile->approval_status === 'approved') {
+            return;
+        }
+
+        $user = $profile->user;
+
+        if ($user && $user->hasApprovedCredentials()) {
+            $profile->update([
+                'approval_status' => 'approved',
+                'approved_at'     => now(),
+                'rejection_reason' => null,
+            ]);
+
+            // Ensure the user account is active
+            if ($user->status !== 'active') {
+                $user->update(['status' => 'active']);
+            }
+
+            NotificationService::freelancerApproved($userId);
+        }
     }
 }

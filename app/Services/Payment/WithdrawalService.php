@@ -102,12 +102,15 @@ class WithdrawalService
                 'user_id'       => $userId,
             ], $userId);
 
+            // Auto-process the withdrawal immediately (no admin approval needed)
+            $this->process($withdrawal);
+
             return $withdrawal;
         });
     }
 
     /**
-     * Process a withdrawal (called by queue/cron).
+     * Process a withdrawal (called automatically after request, or by queue/cron).
      */
     public function process(Withdrawal $withdrawal): void
     {

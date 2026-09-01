@@ -32,14 +32,34 @@ class FinanceController extends BaseApiController
             ->sum('amount');
 
         // Platform revenue (fees collected)
+        // Use platform_fee (set at release time by our workflow). Fall back to fee column
+        // for legacy seed data where only the fee column was populated.
         $totalPlatformRevenue = Payment::where('status', Payment::STATUS_COMPLETED)
             ->where('type', Payment::TYPE_ESCROW_FUNDED)
-            ->sum('fee');
+            ->where('platform_fee', '>', 0)
+            ->sum('platform_fee');
+
+        // If no platform_fee records, fall back to legacy fee column
+        if ($totalPlatformRevenue == 0) {
+            $totalPlatformRevenue = Payment::where('status', Payment::STATUS_COMPLETED)
+                ->where('type', Payment::TYPE_ESCROW_FUNDED)
+                ->where('fee', '>', 0)
+                ->sum('fee');
+        }
 
         $monthlyPlatformRevenue = Payment::where('status', Payment::STATUS_COMPLETED)
             ->where('type', Payment::TYPE_ESCROW_FUNDED)
+            ->where('platform_fee', '>', 0)
             ->where('processed_at', '>=', $startOfMonth)
-            ->sum('fee');
+            ->sum('platform_fee');
+
+        if ($monthlyPlatformRevenue == 0) {
+            $monthlyPlatformRevenue = Payment::where('status', Payment::STATUS_COMPLETED)
+                ->where('type', Payment::TYPE_ESCROW_FUNDED)
+                ->where('fee', '>', 0)
+                ->where('processed_at', '>=', $startOfMonth)
+                ->sum('fee');
+        }
 
         // Held funds (funded escrow remaining after release or refund)
         $releasedSum = (float) DB::table('payments')
@@ -102,8 +122,17 @@ class FinanceController extends BaseApiController
 
             $monthPlatformRevenue = Payment::where('status', Payment::STATUS_COMPLETED)
                 ->where('type', Payment::TYPE_ESCROW_FUNDED)
+                ->where('platform_fee', '>', 0)
                 ->whereBetween('processed_at', [$monthStart, $monthEnd])
-                ->sum('fee');
+                ->sum('platform_fee');
+
+            if ($monthPlatformRevenue == 0) {
+                $monthPlatformRevenue = Payment::where('status', Payment::STATUS_COMPLETED)
+                    ->where('type', Payment::TYPE_ESCROW_FUNDED)
+                    ->where('fee', '>', 0)
+                    ->whereBetween('processed_at', [$monthStart, $monthEnd])
+                    ->sum('fee');
+            }
 
             $monthReleased = Payment::where('status', Payment::STATUS_COMPLETED)
                 ->where('type', Payment::TYPE_MILESTONE_RELEASED)

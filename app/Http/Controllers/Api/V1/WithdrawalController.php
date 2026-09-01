@@ -151,22 +151,38 @@ class WithdrawalController extends BaseApiController
             ->where('type', \App\Models\Payment::TYPE_ESCROW_FUNDED)
             ->where('status', \App\Models\Payment::STATUS_COMPLETED)
             ->whereHas('milestone', function ($q) {
-                $q->whereIn('status', ['funded', 'in_progress', 'submitted']);
+                $q->whereIn('status', [
+                    \App\Models\Milestone::STATUS_FUNDED,
+                    \App\Models\Milestone::STATUS_IN_PROGRESS,
+                    \App\Models\Milestone::STATUS_SUBMITTED,
+                    \App\Models\Milestone::STATUS_IN_REVIEW,
+                    \App\Models\Milestone::STATUS_REVISION,
+                    \App\Models\Milestone::STATUS_APPROVED,
+                    \App\Models\Milestone::STATUS_DISPUTED,
+                ]);
             })
             ->sum('amount');
 
-        // Account balance (pre-funded or credit)
-        $wallet = \App\Models\Wallet::firstOrCreate(
-            ['user_id' => $user->id],
-            ['currency' => 'ETB']
-        );
+        // Monthly spending (this month only)
+        $monthlySpent = \App\Models\Payment::where('payer_id', $user->id)
+            ->where('type', \App\Models\Payment::TYPE_ESCROW_FUNDED)
+            ->where('status', \App\Models\Payment::STATUS_COMPLETED)
+            ->where('created_at', '>=', now()->startOfMonth())
+            ->sum('amount');
+
+        // Budget remaining (monthly limit minus spent this month)
+        $budget = \App\Models\EmployerBudget::where('user_id', $user->id)->first();
+        $monthlyLimit = $budget ? (float) $budget->monthly_limit : 0;
+        $budgetRemaining = $monthlyLimit > 0 ? max(0, $monthlyLimit - (float) $monthlySpent) : 0;
 
         return $this->sendResponse([
-            'account_balance'   => (float) $wallet->available_balance,
+            'account_balance'   => $budgetRemaining,
+            'monthly_limit'     => $monthlyLimit,
+            'monthly_spent'     => (float) $monthlySpent,
             'pending_payments'  => (float) $pendingPayments,
             'total_spent'       => (float) $totalSpent,
             'total_fees'        => (float) ($totalPlatformFees + $totalProcessingFees),
-            'currency'          => $wallet->currency,
+            'currency'          => 'ETB',
         ], 'Employer finance retrieved.');
     }
 }
