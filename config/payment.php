@@ -6,7 +6,7 @@ return [
     | Payment Provider
     |--------------------------------------------------------------------------
     | Default provider for processing payments. Use 'sandbox' for development.
-    | Options: 'sandbox', 'telebirr', 'cbe', 'stripe'
+    | Options: 'sandbox', 'chapa'
     */
     'default' => env('PAYMENT_PROVIDER', 'sandbox'),
 
@@ -56,4 +56,21 @@ return [
     |--------------------------------------------------------------------------
     */
     'supported_currencies' => ['ETB', 'USD'],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Chapa Configuration
+    |--------------------------------------------------------------------------
+    | Configuration for the Chapa payment gateway.
+    | @see https://developer.chapa.co
+    */
+    'chapa' => [
+        'secret_key'   => env('CHAPA_SECRET_KEY', ''),
+        'public_key'   => env('CHAPA_PUBLIC_KEY', ''),
+        'base_url'     => env('CHAPA_BASE_URL', 'https://api.chapa.co'),
+        'callback_url' => env('CHAPA_CALLBACK_URL', ''),
+        'return_url'   => env('CHAPA_RETURN_URL', ''),
+        'title'        => env('CHAPA_TITLE', 'DreamMore Payment'),
+        'description'  => env('CHAPA_DESCRIPTION', 'Complete your payment'),
+    ],
 ];

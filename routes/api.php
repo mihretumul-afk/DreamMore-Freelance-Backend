@@ -164,6 +164,15 @@ use App\Http\Controllers\Api\V1\TransactionController;
 use App\Http\Controllers\Api\V1\Admin\FinanceController;
 use App\Http\Controllers\Api\V1\RecommendationController;
 use App\Http\Controllers\Api\V1\DisputeController;
+use App\Http\Controllers\Api\V1\FeaturedController;
+
+// ── Featured Listings ──────────────────────────────────────────────────
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/jobs/{job}/feature', [FeaturedController::class, 'featureJob']);
+    Route::get('/jobs/{job}/featured', [FeaturedController::class, 'jobFeaturedStatus']);
+    Route::post('/freelancer-profile/feature', [FeaturedController::class, 'featureProfile']);
+    Route::get('/freelancer-profile/featured', [FeaturedController::class, 'profileFeaturedStatus']);
+});
 
 // ── Disputes (User-facing) ──────────────────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
@@ -233,6 +242,17 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/transactions', [TransactionController::class, 'index']);
 });
+
+// ── Add Funds (Wallet Deposit) ──────────────────────────────────────
+use App\Http\Controllers\Api\V1\AddFundsController;
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/wallet/deposit', [AddFundsController::class, 'initiate']);
+    Route::get('/wallet/deposit/{payment}', [AddFundsController::class, 'status']);
+});
+
+// Webhook for deposit confirmation (no auth — provider calls directly)
+Route::post('/webhooks/deposit/{provider}', [AddFundsController::class, 'webhook']);
 
 // ── Budget (Employer) ───────────────────────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
