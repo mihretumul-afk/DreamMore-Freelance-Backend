@@ -627,4 +627,45 @@ class AuditService
             "Webhook processed from {$provider} for transaction {$txRef}"
         );
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PLATFORM REVENUE actions
+    // ═══════════════════════════════════════════════════════════════════
+
+    public static function platformWithdrawal(int $withdrawalId, int $actorId, array $context = []): AuditLog
+    {
+        $label     = self::actorLabel($actorId);
+        $reference = $context['reference'] ?? "Platform Withdrawal #{$withdrawalId}";
+        $amount    = isset($context['amount'], $context['currency'])
+            ? "{$context['currency']} {$context['amount']}"
+            : ($context['amount'] ?? '');
+        $bankName  = $context['bank_name'] ?? '';
+        $accountName = $context['account_name'] ?? '';
+        $desc = "{$label} withdrew platform revenue" . ($amount ? " of {$amount}" : '') . " ({$reference})";
+        if ($accountName) {
+            $desc .= " to {$accountName}";
+        }
+        if ($bankName) {
+            $desc .= " at {$bankName}";
+        }
+        return self::log(
+            'platform_withdrawal', AuditLog::MODULE_PAYMENTS,
+            'PlatformWithdrawal', $withdrawalId, $context, $actorId, $desc
+        );
+    }
+
+    public static function platformDeposit(int $depositId, int $actorId, array $context = []): AuditLog
+    {
+        $label     = self::actorLabel($actorId);
+        $reference = $context['reference'] ?? "Platform Deposit #{$depositId}";
+        $amount    = isset($context['amount'], $context['currency'])
+            ? "{$context['currency']} {$context['amount']}"
+            : ($context['amount'] ?? '');
+        $desc = $context['description'] ?? '';
+        return self::log(
+            'platform_deposit', AuditLog::MODULE_PAYMENTS,
+            'PlatformDeposit', $depositId, $context, $actorId,
+            "{$label} added platform funds" . ($amount ? " of {$amount}" : '') . " ({$reference})" . ($desc ? ": {$desc}" : '')
+        );
+    }
 }

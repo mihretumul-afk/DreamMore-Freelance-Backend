@@ -367,6 +367,11 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     Route::get('/finance/payments', [FinanceController::class, 'payments'])->middleware('permission:payments.view');
     Route::get('/finance/withdrawals', [FinanceController::class, 'withdrawals'])->middleware('permission:withdrawals.view');
     Route::post('/finance/withdrawals/{withdrawal}/approve', [FinanceController::class, 'approveWithdrawal'])->middleware('permission:withdrawals.manage');
+    
+    // Platform Revenue Management
+    Route::get('/finance/platform-revenue', [FinanceController::class, 'getPlatformRevenue'])->middleware('permission:finance.view');
+    Route::post('/finance/withdraw-revenue', [FinanceController::class, 'withdrawPlatformRevenue'])->middleware('permission:finance.manage');
+    Route::post('/finance/add-funds', [FinanceController::class, 'addPlatformFunds'])->middleware('permission:finance.manage');
 
     // Audit logs
     Route::get('/audit-logs', [AdminUserController::class, 'auditLogs'])->middleware('permission:audit_logs.view');

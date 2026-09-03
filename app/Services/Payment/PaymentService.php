@@ -58,7 +58,10 @@ class PaymentService
      */
     public function fundMilestone(Milestone $milestone, int $employerId, int $paymentMethodId): Payment
     {
-        return DB::transaction(function () use ($milestone, $employerId, $paymentMethodId) {
+        $shouldBroadcast = false;
+        $freelancerId = null;
+
+        $payment = DB::transaction(function () use ($milestone, $employerId, $paymentMethodId, &$shouldBroadcast, &$freelancerId) {
             $contract = $milestone->contract;
 
             // Validate access
@@ -169,19 +172,28 @@ class PaymentService
                 $amount
             );
 
-            // Broadcast finance update
-            \App\Events\FinanceUpdated::dispatch('milestone_funded', [
-                'payment_id'     => $payment->id,
-                'milestone_id'   => $milestone->id,
-                'milestone_title' => $milestone->title,
-                'amount'         => $amount,
-                'platform_fee'   => 0,
-                'employer_id'    => $employerId,
-                'freelancer_id'  => $contract->freelancer_id,
-            ], $employerId);
+            // Mark that we should broadcast after commit
+            $shouldBroadcast = true;
+            $freelancerId = $contract->freelancer_id;
 
             return $payment;
         });
+
+        // Broadcast finance update AFTER transaction commits so the dashboard
+        // sees the committed data when it re-fetches.
+        if ($shouldBroadcast) {
+            \App\Events\FinanceUpdated::dispatch('milestone_funded', [
+                'payment_id'      => $payment->id,
+                'milestone_id'    => $milestone->id,
+                'milestone_title' => $milestone->title,
+                'amount'          => $milestone->amount,
+                'platform_fee'    => 0,
+                'employer_id'     => $employerId,
+                'freelancer_id'   => $freelancerId,
+            ], $employerId);
+        }
+
+        return $payment;
     }
 
     /**
@@ -196,7 +208,7 @@ class PaymentService
      */
     public function releaseMilestone(Milestone $milestone, ?int $actorId): Payment
     {
-        return DB::transaction(function () use ($milestone, $actorId) {
+        $result = DB::transaction(function () use ($milestone, $actorId) {
             $contract = $milestone->contract;
 
             // Find the funding payment
@@ -285,16 +297,6 @@ class PaymentService
                 $releaseAmount
             );
 
-            // Broadcast finance update
-            \App\Events\FinanceUpdated::dispatch('milestone_released', [
-                'payment_id'      => $releasePayment->id,
-                'milestone_id'    => $milestone->id,
-                'milestone_title' => $milestone->title,
-                'amount'          => $releaseAmount,
-                'employer_id'     => $payment->payer_id,
-                'freelancer_id'   => $freelancerId,
-            ], $payment->payer_id);
-
             // Check if all milestones are released → contract completed
             $allReleased = $contract->milestones()
                 ->where('status', '!=', Milestone::STATUS_RELEASED)
@@ -310,8 +312,26 @@ class PaymentService
                 NotificationService::contractCompleted($contract->employer_id, $contract->title, 'employer');
             }
 
-            return $releasePayment;
+            return [
+                'release_payment' => $releasePayment,
+                'employer_id'     => $payment->payer_id,
+                'freelancer_id'   => $freelancerId,
+                'amount'          => $releaseAmount,
+            ];
         });
+
+        // Broadcast finance update AFTER transaction commits so the dashboard
+        // sees the committed data when it re-fetches.
+        \App\Events\FinanceUpdated::dispatch('milestone_released', [
+            'payment_id'      => $result['release_payment']->id,
+            'milestone_id'    => $milestone->id,
+            'milestone_title' => $milestone->title,
+            'amount'          => $result['amount'],
+            'employer_id'     => $result['employer_id'],
+            'freelancer_id'   => $result['freelancer_id'],
+        ], $result['employer_id']);
+
+        return $result['release_payment'];
     }
 
     /**
@@ -319,7 +339,7 @@ class PaymentService
      */
     public function processRefund(Payment $originalPayment, int $actorId, string $reason = ''): Payment
     {
-        return DB::transaction(function () use ($originalPayment, $actorId, $reason) {
+        $refund = DB::transaction(function () use ($originalPayment, $actorId, $reason) {
             if ($originalPayment->status !== Payment::STATUS_COMPLETED) {
                 throw new \RuntimeException('Only completed payments can be refunded.');
             }
@@ -390,6 +410,19 @@ class PaymentService
 
             return $refund;
         });
+
+        // Broadcast finance update AFTER transaction commits so the dashboard
+        // sees the committed data when it re-fetches.
+        if ($refund && $refund->status === Payment::STATUS_COMPLETED) {
+            \App\Events\FinanceUpdated::dispatch('refund_completed', [
+                'payment_id'      => $refund->id,
+                'milestone_id'    => $originalPayment->milestone_id,
+                'amount'          => $refund->amount,
+                'employer_id'     => $originalPayment->payer_id,
+            ], $actorId);
+        }
+
+        return $refund;
     }
 
     /**

@@ -303,4 +303,265 @@ class FinanceController extends BaseApiController
             return $this->sendError($e->getMessage(), [], 422);
         }
     }
+
+    /**
+     * Withdraw platform revenue (admin).
+     *
+     * Transfers all available platform revenue (collected from milestone fees
+     * and featured listing fees) to the admin's designated bank account.
+     *
+     * POST /api/v1/admin/finance/withdraw-revenue
+     */
+    public function withdrawPlatformRevenue(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'amount'          => 'required|numeric|min:1',
+            'account_name'    => 'required|string|max:255',
+            'account_number'  => 'required|string|max:255',
+            'bank_name'       => 'required|string|max:255',
+            'bank_code'       => 'nullable|string|max:50',
+            'description'     => 'nullable|string|max:500',
+        ]);
+
+        $amount = (float) $validated['amount'];
+
+        // Calculate available platform revenue
+        $totalPlatformRevenue = $this->calculatePlatformRevenue();
+        $totalWithdrawn = $this->calculatePlatformWithdrawals();
+        $availableRevenue = $totalPlatformRevenue - $totalWithdrawn;
+
+        if ($amount > $availableRevenue) {
+            return $this->sendError(
+                "Insufficient platform revenue. Available: " . number_format($availableRevenue, 2) . " ETB.",
+                [], 422
+            );
+        }
+
+        try {
+            $withdrawal = DB::transaction(function () use ($validated, $amount, $request) {
+                // Create platform withdrawal record
+                $withdrawal = \App\Models\PlatformWithdrawal::create([
+                    'reference'       => 'PLAT-WTH-' . strtoupper(uniqid()),
+                    'amount'          => $amount,
+                    'currency'        => 'ETB',
+                    'status'          => 'completed',
+                    'account_name'    => $validated['account_name'],
+                    'account_number'  => $validated['account_number'],
+                    'bank_name'       => $validated['bank_name'],
+                    'bank_code'       => $validated['bank_code'] ?? null,
+                    'description'     => $validated['description'] ?? 'Platform revenue withdrawal',
+                    'processed_by'    => $request->user()->id,
+                    'completed_at'    => now(),
+                ]);
+
+                // Record audit log
+                \App\Services\AuditService::platformWithdrawal($withdrawal->id, $request->user()->id, [
+                    'reference'     => $withdrawal->reference,
+                    'amount'        => $amount,
+                    'currency'      => 'ETB',
+                    'account_name'  => $validated['account_name'],
+                    'bank_name'     => $validated['bank_name'],
+                ]);
+
+                // Broadcast finance update
+                \App\Events\FinanceUpdated::dispatch('platform_withdrawal', [
+                    'withdrawal_id'  => $withdrawal->id,
+                    'reference'      => $withdrawal->reference,
+                    'amount'         => $amount,
+                    'account_name'   => $validated['account_name'],
+                    'bank_name'      => $validated['bank_name'],
+                ], $request->user()->id);
+
+                return $withdrawal;
+            });
+
+            return $this->sendResponse([
+                'withdrawal' => [
+                    'id'           => $withdrawal->id,
+                    'reference'    => $withdrawal->reference,
+                    'amount'       => (float) $withdrawal->amount,
+                    'status'       => $withdrawal->status,
+                    'account_name' => $withdrawal->account_name,
+                    'bank_name'    => $withdrawal->bank_name,
+                    'completed_at' => $withdrawal->completed_at?->toIso8601String(),
+                ],
+                'available_revenue' => $availableRevenue - $amount,
+            ], 'Platform revenue withdrawn successfully.');
+        } catch (\Exception $e) {
+            return $this->sendError('Failed to process withdrawal: ' . $e->getMessage(), [], 500);
+        }
+    }
+
+    /**
+     * Add funds to platform wallet (admin).
+     *
+     * Manually credits the platform wallet with funds (e.g., for operational
+     * expenses, promotional credits, or external deposits).
+     *
+     * POST /api/v1/admin/finance/add-funds
+     */
+    public function addPlatformFunds(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'amount'       => 'required|numeric|min:1|max:10000000',
+            'description'  => 'required|string|max:500',
+            'source'       => 'nullable|string|max:255',
+        ]);
+
+        $amount = (float) $validated['amount'];
+
+        try {
+            $deposit = DB::transaction(function () use ($validated, $amount, $request) {
+                // Use the current admin user's wallet
+                $adminId = $request->user()->id;
+                $wallet = \App\Models\Wallet::forUser($adminId);
+
+                // Credit the wallet
+                $wallet->creditAvailable($amount);
+
+                // Create deposit record
+                $deposit = \App\Models\PlatformDeposit::create([
+                    'reference'    => 'PLAT-DEP-' . strtoupper(uniqid()),
+                    'amount'       => $amount,
+                    'currency'     => 'ETB',
+                    'status'       => 'completed',
+                    'description'  => $validated['description'],
+                    'source'       => $validated['source'] ?? 'Manual admin deposit',
+                    'deposited_by' => $adminId,
+                    'completed_at' => now(),
+                ]);
+
+                // Record ledger transaction
+                \App\Models\Transaction::create([
+                    'reference'      => \App\Models\Transaction::generateReference(),
+                    'user_id'        => $adminId,
+                    'wallet_id'      => $wallet->id,
+                    'direction'      => \App\Models\Transaction::DIR_CREDIT,
+                    'type'           => 'platform_deposit',
+                    'amount'         => $amount,
+                    'balance_before' => (float) $wallet->available_balance - $amount,
+                    'balance_after'  => (float) $wallet->available_balance,
+                    'currency'       => 'ETB',
+                    'status'         => \App\Models\Transaction::STATUS_COMPLETED,
+                    'description'    => $validated['description'],
+                ]);
+
+                // Record audit log
+                \App\Services\AuditService::platformDeposit($deposit->id, $request->user()->id, [
+                    'reference'   => $deposit->reference,
+                    'amount'      => $amount,
+                    'currency'    => 'ETB',
+                    'description' => $validated['description'],
+                ]);
+
+                // Broadcast finance update
+                \App\Events\FinanceUpdated::dispatch('platform_deposit', [
+                    'deposit_id'   => $deposit->id,
+                    'reference'    => $deposit->reference,
+                    'amount'       => $amount,
+                    'description'  => $validated['description'],
+                ], $request->user()->id);
+
+                return [
+                    'deposit' => $deposit,
+                    'wallet'  => $wallet->fresh(),
+                ];
+            });
+
+            return $this->sendResponse([
+                'deposit' => [
+                    'id'          => $deposit['deposit']->id,
+                    'reference'   => $deposit['deposit']->reference,
+                    'amount'      => (float) $deposit['deposit']->amount,
+                    'status'      => $deposit['deposit']->status,
+                    'description' => $deposit['deposit']->description,
+                    'completed_at' => $deposit['deposit']->completed_at?->toIso8601String(),
+                ],
+                'wallet' => [
+                    'available_balance' => (float) $deposit['wallet']->available_balance,
+                    'pending_balance'   => (float) $deposit['wallet']->pending_balance,
+                ],
+            ], 'Funds added to platform successfully.');
+        } catch (\Exception $e) {
+            return $this->sendError('Failed to add funds: ' . $e->getMessage(), [], 500);
+        }
+    }
+
+    /**
+     * Get platform revenue summary for withdrawal.
+     *
+     * GET /api/v1/admin/finance/platform-revenue
+     */
+    public function getPlatformRevenue(Request $request): JsonResponse
+    {
+        $totalPlatformRevenue = $this->calculatePlatformRevenue();
+        $totalWithdrawn = $this->calculatePlatformWithdrawals();
+        $availableRevenue = $totalPlatformRevenue - $totalWithdrawn;
+
+        // Get recent withdrawals
+        $recentWithdrawals = \App\Models\PlatformWithdrawal::orderByDesc('created_at')
+            ->limit(10)
+            ->get()
+            ->map(fn($w) => [
+                'id'           => $w->id,
+                'reference'    => $w->reference,
+                'amount'       => (float) $w->amount,
+                'status'       => $w->status,
+                'account_name' => $w->account_name,
+                'bank_name'    => $w->bank_name,
+                'completed_at' => $w->completed_at?->toIso8601String(),
+            ]);
+
+        // Get recent deposits
+        $recentDeposits = \App\Models\PlatformDeposit::orderByDesc('created_at')
+            ->limit(10)
+            ->get()
+            ->map(fn($d) => [
+                'id'          => $d->id,
+                'reference'   => $d->reference,
+                'amount'      => (float) $d->amount,
+                'status'      => $d->status,
+                'description' => $d->description,
+                'completed_at' => $d->completed_at?->toIso8601String(),
+            ]);
+
+        return $this->sendResponse([
+            'total_revenue'      => $totalPlatformRevenue,
+            'total_withdrawn'    => $totalWithdrawn,
+            'available_revenue'  => max(0, $availableRevenue),
+            'recent_withdrawals' => $recentWithdrawals,
+            'recent_deposits'    => $recentDeposits,
+        ], 'Platform revenue summary retrieved.');
+    }
+
+    /**
+     * Calculate total platform revenue from milestone fees.
+     */
+    private function calculatePlatformRevenue(): float
+    {
+        // Milestone fees
+        $milestoneFees = (float) Payment::where('status', Payment::STATUS_COMPLETED)
+            ->where('type', Payment::TYPE_ESCROW_FUNDED)
+            ->where('platform_fee', '>', 0)
+            ->sum('platform_fee');
+
+        // Featured listing fees
+        $featuredFees = (float) Transaction::where('type', Transaction::TYPE_FEATURED_JOB_FEE)
+            ->where('status', Transaction::STATUS_COMPLETED)
+            ->sum('amount')
+            + (float) Transaction::where('type', Transaction::TYPE_FEATURED_PROFILE_FEE)
+            ->where('status', Transaction::STATUS_COMPLETED)
+            ->sum('amount');
+
+        return $milestoneFees + $featuredFees;
+    }
+
+    /**
+     * Calculate total platform withdrawals.
+     */
+    private function calculatePlatformWithdrawals(): float
+    {
+        return (float) \App\Models\PlatformWithdrawal::where('status', 'completed')
+            ->sum('amount');
+    }
 }

@@ -41,7 +41,7 @@ class WithdrawalService
      */
     public function request(int $userId, float $amount, int $paymentMethodId): Withdrawal
     {
-        return DB::transaction(function () use ($userId, $amount, $paymentMethodId) {
+        $withdrawal = DB::transaction(function () use ($userId, $amount, $paymentMethodId) {
             $wallet = Wallet::where('user_id', $userId)->first();
             if (!$wallet) {
                 throw new \RuntimeException('No wallet found.');
@@ -104,20 +104,25 @@ class WithdrawalService
                     $fee,
                     $netAmount
                 );
-
-                // Broadcast finance update
-                \App\Events\FinanceUpdated::dispatch('withdrawal_requested', [
-                    'withdrawal_id' => $withdrawal->id,
-                    'reference'     => $reference,
-                    'amount'        => $amount,
-                    'fee'           => $fee,
-                    'net_amount'    => $netAmount,
-                    'user_id'       => $userId,
-                ], $userId);
             }
 
             return $withdrawal;
         });
+
+        // Broadcast finance update AFTER transaction commits so the dashboard
+        // sees the committed data when it re-fetches.
+        if ($withdrawal && $withdrawal->status !== Withdrawal::STATUS_FAILED) {
+            \App\Events\FinanceUpdated::dispatch('withdrawal_requested', [
+                'withdrawal_id' => $withdrawal->id,
+                'reference'     => $withdrawal->reference,
+                'amount'        => $withdrawal->amount,
+                'fee'           => $withdrawal->fee,
+                'net_amount'    => $withdrawal->net_amount,
+                'user_id'       => $userId,
+            ], $userId);
+        }
+
+        return $withdrawal;
     }
 
     /**
@@ -125,7 +130,9 @@ class WithdrawalService
      */
     public function process(Withdrawal $withdrawal): void
     {
-        DB::transaction(function () use ($withdrawal) {
+        $broadcastData = null;
+
+        DB::transaction(function () use ($withdrawal, &$broadcastData) {
             if ($withdrawal->status !== Withdrawal::STATUS_REQUESTED) {
                 throw new \RuntimeException("Withdrawal cannot be processed. Status: '{$withdrawal->status}'.");
             }
@@ -206,15 +213,19 @@ class WithdrawalService
                     $withdrawal->net_amount
                 );
 
-                // Broadcast finance update
-                \App\Events\FinanceUpdated::dispatch('withdrawal_completed', [
-                    'withdrawal_id' => $withdrawal->id,
-                    'reference'     => $withdrawal->reference,
-                    'amount'        => $withdrawal->amount,
-                    'fee'           => $withdrawal->fee,
-                    'net_amount'    => $withdrawal->net_amount,
-                    'user_id'       => $withdrawal->user_id,
-                ], $withdrawal->user_id);
+                // Capture broadcast data (dispatched after transaction commits)
+                $broadcastData = [
+                    'type' => 'withdrawal_completed',
+                    'data' => [
+                        'withdrawal_id' => $withdrawal->id,
+                        'reference'     => $withdrawal->reference,
+                        'amount'        => $withdrawal->amount,
+                        'fee'           => $withdrawal->fee,
+                        'net_amount'    => $withdrawal->net_amount,
+                        'user_id'       => $withdrawal->user_id,
+                    ],
+                    'actor_id' => $withdrawal->user_id,
+                ];
             } else {
                 $withdrawal->update([
                     'status'          => Withdrawal::STATUS_FAILED,
@@ -242,6 +253,16 @@ class WithdrawalService
                 );
             }
         });
+
+        // Broadcast finance update AFTER transaction commits so the dashboard
+        // sees the committed data when it re-fetches.
+        if ($broadcastData) {
+            \App\Events\FinanceUpdated::dispatch(
+                $broadcastData['type'],
+                $broadcastData['data'],
+                $broadcastData['actor_id']
+            );
+        }
     }
 
     /**
