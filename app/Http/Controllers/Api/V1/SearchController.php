@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Resources\Api\V1\FreelancerResource;
 use App\Http\Resources\Api\V1\JobResource;
+use App\Models\FeaturedJob;
+use App\Models\FeaturedProfile;
 use App\Models\FreelancerProfile;
 use App\Models\Job;
 use Illuminate\Http\JsonResponse;
@@ -43,8 +45,8 @@ class SearchController extends BaseApiController
         $freelancers = $this->searchFreelancers($terms, $perPage);
 
         return $this->sendResponse([
-            'jobs' => JobResource::collection($jobs),
-            'freelancers' => FreelancerResource::collection($freelancers),
+            'jobs' => JobResource::collection($jobs)->resolve($request),
+            'freelancers' => FreelancerResource::collection($freelancers)->resolve($request),
             'jobs_total' => $jobs->total(),
             'freelancers_total' => $freelancers->total(),
         ], 'Search completed successfully.');
@@ -97,7 +99,21 @@ class SearchController extends BaseApiController
             });
         }
 
-        return $query->orderByDesc('published_at')->paginate($perPage);
+        // Featured jobs first, then by published_at
+        $query->selectRaw('(SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM featured_jobs
+            WHERE featured_jobs.job_id = marketplace_jobs.id
+            AND featured_jobs.status = ?
+            AND featured_jobs.expires_at > UTC_TIMESTAMP()
+        ) THEN 1 ELSE 0 END) as is_featured', [FeaturedJob::STATUS_ACTIVE])
+            ->orderByRaw('(SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM featured_jobs
+                WHERE featured_jobs.job_id = marketplace_jobs.id
+                AND featured_jobs.status = ?
+                AND featured_jobs.expires_at > UTC_TIMESTAMP()
+            ) THEN 0 ELSE 1 END)', [FeaturedJob::STATUS_ACTIVE])
+            ->orderByDesc('published_at')
+            ->paginate($perPage);
     }
 
     /**
@@ -125,7 +141,15 @@ class SearchController extends BaseApiController
             });
         }
 
-        return $query->orderByDesc('rating')->paginate($perPage);
+        // Featured profiles first, then by rating
+        $query->orderByRaw('(SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM featured_profiles
+            WHERE featured_profiles.user_id = freelancer_profiles.user_id
+            AND featured_profiles.status = ?
+            AND featured_profiles.expires_at > UTC_TIMESTAMP()
+        ) THEN 0 ELSE 1 END)', [FeaturedProfile::STATUS_ACTIVE])
+            ->orderByDesc('rating')
+            ->paginate($perPage);
     }
 
     /**

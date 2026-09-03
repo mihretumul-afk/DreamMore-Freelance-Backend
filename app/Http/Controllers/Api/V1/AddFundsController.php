@@ -138,4 +138,89 @@ class AddFundsController extends BaseApiController
             return response()->json(['error' => 'Internal error'], 500);
         }
     }
+
+    /**
+     * Reconcile a specific deposit by reference.
+     *
+     * POST /api/v1/wallet/deposit/reconcile/{reference}
+     *
+     * Called by the frontend after returning from Chapa checkout.
+     * Polls Chapa API and credits wallet if payment is confirmed.
+     */
+    public function reconcile(Request $request, string $reference): JsonResponse
+    {
+        $user = $request->user();
+
+        $payment = \App\Models\Payment::where('reference', $reference)
+            ->where('payer_id', $user->id)
+            ->where('type', \App\Models\Payment::TYPE_WALLET_DEPOSIT)
+            ->first();
+
+        if (!$payment) {
+            return $this->sendError('Payment not found.', [], 404);
+        }
+
+        try {
+            $service = app(AddFundsService::class);
+            $status = $service->getDepositStatus($payment, $user->id);
+
+            return $this->sendResponse($status, 'Deposit status retrieved.');
+        } catch (\RuntimeException $e) {
+            return $this->sendError($e->getMessage(), [], 422);
+        }
+    }
+
+    /**
+     * Reconcile ALL pending deposits for the current user.
+     *
+     * POST /api/v1/wallet/deposit/reconcile-all
+     *
+     * Called by the frontend on page load to ensure any completed
+     * but uncredited deposits get processed.
+     */
+    public function reconcileAll(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $service = app(AddFundsService::class);
+        $reconciled = 0;
+
+        // Only check payments older than 2 minutes (recent ones are still processing)
+        $pendingPayments = \App\Models\Payment::where('payer_id', $user->id)
+            ->where('type', \App\Models\Payment::TYPE_WALLET_DEPOSIT)
+            ->where('status', \App\Models\Payment::STATUS_PENDING)
+            ->whereNotNull('provider_reference')
+            ->where('created_at', '<=', now()->subMinutes(2))
+            ->limit(3)  // Max 3 at a time to prevent timeouts
+            ->get();
+
+        if ($pendingPayments->isEmpty()) {
+            return $this->sendResponse(['reconciled' => 0, 'pending' => 0], 'No pending deposits.');
+        }
+
+        foreach ($pendingPayments as $payment) {
+            try {
+                // Skip payments older than 30 minutes — likely never completed
+                if ($payment->created_at->diffInMinutes(now()) > 30) {
+                    $payment->update([
+                        'status'         => \App\Models\Payment::STATUS_FAILED,
+                        'failure_reason' => 'Payment expired — not completed within 30 minutes',
+                    ]);
+                    continue;
+                }
+
+                $service->getDepositStatus($payment, $user->id);
+                $payment->refresh();
+                if ($payment->status === \App\Models\Payment::STATUS_COMPLETED) {
+                    $reconciled++;
+                }
+            } catch (\Exception $e) {
+                // Continue with next payment
+            }
+        }
+
+        return $this->sendResponse([
+            'reconciled' => $reconciled,
+            'pending'    => $pendingPayments->count() - $reconciled,
+        ], 'Reconciliation complete.');
+    }
 }

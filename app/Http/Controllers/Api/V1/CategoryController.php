@@ -32,7 +32,7 @@ class CategoryController extends BaseApiController
             ->get();
 
         return $this->sendResponse(
-            CategoryResource::collection($categories),
+            CategoryResource::collection($categories)->resolve($request),
             'Categories retrieved successfully.'
         );
     }

@@ -38,7 +38,7 @@ class ProposalController extends BaseApiController
             ->paginate(15);
 
         return $this->sendResponse(
-            ProposalResource::collection($proposals),
+            ProposalResource::collection($proposals)->resolve($request),
             'Proposals retrieved successfully.',
             200,
             $this->paginationMeta($proposals)
@@ -242,7 +242,7 @@ class ProposalController extends BaseApiController
             ->paginate(15);
 
         return $this->sendResponse(
-            ProposalResource::collection($proposals),
+            ProposalResource::collection($proposals)->resolve($request),
             'Proposals retrieved successfully.',
             200,
             $this->paginationMeta($proposals)

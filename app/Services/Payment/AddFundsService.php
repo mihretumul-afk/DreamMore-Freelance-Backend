@@ -105,12 +105,22 @@ class AddFundsService
             ]);
         });
 
+        // ── Determine return URL based on user role ───────────────────
+        $user = User::find($userId);
+        $returnUrlBase = config('payment.chapa.return_url', url('/wallet'));
+        if ($user && $user->role === 'freelancer') {
+            $returnUrlBase = 'http://localhost:5173/freelancer/withdrawals';
+        } elseif ($user && $user->role === 'employer') {
+            $returnUrlBase = 'http://localhost:5173/employer/settings/payment-methods';
+        }
+
         // ── Charge via provider ────────────────────────────────────────
         $result = $this->provider->charge($amount, 'ETB', $reference, [
             'user_id'          => $userId,
             'payment_id'       => $payment->id,
             'payment_method_id' => $paymentMethodId,
             'type'             => 'wallet_deposit',
+            'return_url'       => $returnUrlBase,
         ]);
 
         if (!$result['success']) {

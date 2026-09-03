@@ -34,7 +34,7 @@ class MilestoneController extends BaseApiController
             ->get();
 
         return $this->sendResponse(
-            MilestoneResource::collection($milestones),
+            MilestoneResource::collection($milestones)->resolve($request),
             'Milestones retrieved successfully.'
         );
     }

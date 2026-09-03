@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Api\V1\BaseApiController;
+use App\Models\FeaturedJob;
+use App\Models\FeaturedProfile;
 use App\Models\Payment;
 use App\Models\Transaction;
 use App\Models\Wallet;
@@ -148,6 +150,38 @@ class FinanceController extends BaseApiController
             ];
         }
 
+        // ── Featured Listing Revenue ──────────────────────────────────
+        // Featured job fees (completed transactions only)
+        $featuredJobRevenue = Transaction::where('type', Transaction::TYPE_FEATURED_JOB_FEE)
+            ->where('status', Transaction::STATUS_COMPLETED)
+            ->sum('amount');
+
+        $monthlyFeaturedJobRevenue = Transaction::where('type', Transaction::TYPE_FEATURED_JOB_FEE)
+            ->where('status', Transaction::STATUS_COMPLETED)
+            ->where('created_at', '>=', $startOfMonth)
+            ->sum('amount');
+
+        $activeFeaturedJobs = FeaturedJob::where('status', FeaturedJob::STATUS_ACTIVE)
+            ->where('expires_at', '>', now())
+            ->count();
+
+        // Featured profile fees (completed transactions only)
+        $featuredProfileRevenue = Transaction::where('type', Transaction::TYPE_FEATURED_PROFILE_FEE)
+            ->where('status', Transaction::STATUS_COMPLETED)
+            ->sum('amount');
+
+        $monthlyFeaturedProfileRevenue = Transaction::where('type', Transaction::TYPE_FEATURED_PROFILE_FEE)
+            ->where('status', Transaction::STATUS_COMPLETED)
+            ->where('created_at', '>=', $startOfMonth)
+            ->sum('amount');
+
+        $activeFeaturedProfiles = FeaturedProfile::where('status', FeaturedProfile::STATUS_ACTIVE)
+            ->where('expires_at', '>', now())
+            ->count();
+
+        $totalFeaturedRevenue = (float) $featuredJobRevenue + (float) $featuredProfileRevenue;
+        $monthlyFeaturedRevenue = (float) $monthlyFeaturedJobRevenue + (float) $monthlyFeaturedProfileRevenue;
+
         return $this->sendResponse([
             'payment_volume' => [
                 'total'   => (float) $totalPaymentVolume,
@@ -156,6 +190,16 @@ class FinanceController extends BaseApiController
             'platform_revenue' => [
                 'total'   => (float) $totalPlatformRevenue,
                 'monthly' => (float) $monthlyPlatformRevenue,
+            ],
+            'featured_revenue' => [
+                'total'          => $totalFeaturedRevenue,
+                'monthly'        => $monthlyFeaturedRevenue,
+                'jobs_total'     => (float) $featuredJobRevenue,
+                'jobs_monthly'   => (float) $monthlyFeaturedJobRevenue,
+                'jobs_active'    => $activeFeaturedJobs,
+                'profiles_total' => (float) $featuredProfileRevenue,
+                'profiles_monthly' => (float) $monthlyFeaturedProfileRevenue,
+                'profiles_active'  => $activeFeaturedProfiles,
             ],
             'monthly_breakdown' => $monthlyRevenue,
             'held_funds'       => (float) max(0, $heldFunds),

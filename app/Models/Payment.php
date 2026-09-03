@@ -24,6 +24,7 @@ class Payment extends Model
     public const TYPE_MILESTONE_RELEASED = 'milestone_released';
     public const TYPE_REFUND           = 'refund';
     public const TYPE_WITHDRAWAL       = 'withdrawal';
+    public const TYPE_WALLET_DEPOSIT   = 'wallet_deposit';
 
     // ── Refund status constants ───────────────────────────────────────────
     public const REFUND_NONE      = 'none';
@@ -50,6 +51,8 @@ class Payment extends Model
         'provider',
         'provider_transaction_id',
         'provider_reference',
+        'provider_response',
+        'failure_reason',
         'description',
         'metadata',
         'paid_at',

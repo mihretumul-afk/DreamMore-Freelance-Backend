@@ -62,7 +62,7 @@ class AdminUserController extends BaseApiController
         $admins = $query->orderByDesc('created_at')->paginate(15);
 
         return $this->sendResponse(
-            UserResource::collection($admins),
+            UserResource::collection($admins)->resolve($request),
             'Admin users retrieved successfully.',
             200,
             [

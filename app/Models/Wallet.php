@@ -18,6 +18,12 @@ class Wallet extends Model
         'currency',
     ];
 
+    protected $attributes = [
+        'available_balance' => 0.00,
+        'pending_balance'   => 0.00,
+        'currency'          => 'ETB',
+    ];
+
     protected $casts = [
         'available_balance' => 'decimal:2',
         'pending_balance'   => 'decimal:2',

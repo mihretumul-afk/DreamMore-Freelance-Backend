@@ -67,6 +67,23 @@ class User extends Authenticatable
                 $job->delete();
             });
 
+            // Delete contracts before deleting the user because the database enforces
+            // RESTRICT on both employer_id and freelancer_id.
+            $user->employerContracts()->each(fn (Contract $contract) => $contract->delete());
+            $user->freelancerContracts()->each(fn (Contract $contract) => $contract->delete());
+
+            // Financial records are protected by foreign keys on user/wallet/payment
+            // relations. Delete the child records first, in dependency order, so the
+            // user row can be removed without triggering database-level 1451/23000
+            // exceptions on MySQL and SQLite.
+            $user->transactions()->delete();
+            $user->withdrawals()->delete();
+            $user->paymentsAsPayer()->delete();
+            $user->paymentsAsPayee()->delete();
+            $user->paymentMethods()->delete();
+            $user->wallet()->delete();
+            $user->employerBudgets()->delete();
+
             // Clean up freelancer profile and reverse saved freelancer references
             if ($user->freelancerProfile) {
                 SavedFreelancer::where('freelancer_profile_id', $user->freelancerProfile->id)->delete();
@@ -152,6 +169,11 @@ class User extends Authenticatable
     public function freelancerContracts(): HasMany
     {
         return $this->hasMany(Contract::class, 'freelancer_id');
+    }
+
+    public function employerBudgets(): HasMany
+    {
+        return $this->hasMany(EmployerBudget::class);
     }
 
     // ── Financial relationships ──────────────────────────────────────────

@@ -30,8 +30,9 @@ class AuthService
                 'user_id' => $user->id,
                 'approval_status' => 'pending',
             ]);
-            // Notify admins about new freelancer registration
-            NotificationService::newFreelancerRegistered($user->id, $user->name);
+            // Admin notification removed — credential submission now serves as
+            // the verification pathway. Admins will be notified when a
+            // freelancer submits a credential, not at registration time.
         } elseif ($user->role === 'employer') {
             EmployerProfile::create([
                 'user_id' => $user->id,

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Requests\UpdateFreelancerProfileRequest;
 use App\Http\Resources\Api\V1\FreelancerResource;
 use App\Http\Resources\FreelancerProfileResource;
+use App\Models\FeaturedProfile;
 use App\Models\FreelancerProfile;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\JsonResponse;
@@ -60,6 +61,14 @@ class FreelancerProfileController extends BaseApiController
             ->when($request->filled('location'), fn ($query) => $query->where('location', 'like', '%' . $request->input('location') . '%'))
             ->when($request->filled('min_rating'), fn ($query) => $query->where('rating', '>=', $request->input('min_rating')));
 
+        // Featured profiles first, then the requested sort
+        $query->orderByRaw('(SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM featured_profiles
+            WHERE featured_profiles.user_id = freelancer_profiles.user_id
+            AND featured_profiles.status = ?
+            AND featured_profiles.expires_at > UTC_TIMESTAMP()
+        ) THEN 0 ELSE 1 END)', [FeaturedProfile::STATUS_ACTIVE]);
+
         // Sorting: rating desc by default; also support hourly_rate, created_at, experience, completed_jobs.
         $sort = $this->resolveSort($request);
         $query->orderBy($sort[0], $sort[1]);
@@ -68,7 +77,7 @@ class FreelancerProfileController extends BaseApiController
         $freelancers = $query->paginate($perPage);
 
         return $this->sendResponse(
-            FreelancerResource::collection($freelancers),
+            FreelancerResource::collection($freelancers)->resolve($request),
             'Freelancers retrieved successfully.',
             200,
             $this->paginationMeta($freelancers)

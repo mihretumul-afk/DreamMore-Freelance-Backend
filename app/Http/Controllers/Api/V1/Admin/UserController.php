@@ -35,7 +35,7 @@ class UserController extends BaseApiController
         $users = $query->orderByDesc('created_at')->paginate(15);
 
         return $this->sendResponse(
-            UserResource::collection($users),
+            UserResource::collection($users)->resolve($request),
             'Users retrieved successfully.',
             200,
             [

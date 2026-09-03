@@ -11,15 +11,18 @@ class Transaction extends Model
     use HasFactory;
 
     // ── Type constants ────────────────────────────────────────────────────
-    public const TYPE_PAYMENT          = 'payment';
-    public const TYPE_PLATFORM_FEE     = 'platform_fee';
-    public const TYPE_PROCESSING_FEE   = 'processing_fee';
-    public const TYPE_FUNDS_HELD       = 'funds_held';
-    public const TYPE_FUNDS_RELEASED   = 'funds_released';
-    public const TYPE_REFUND           = 'refund';
-    public const TYPE_WITHDRAWAL       = 'withdrawal';
-    public const TYPE_WITHDRAWAL_FEE   = 'withdrawal_fee';
-    public const TYPE_ADJUSTMENT       = 'adjustment';
+    public const TYPE_PAYMENT              = 'payment';
+    public const TYPE_PLATFORM_FEE         = 'platform_fee';
+    public const TYPE_PROCESSING_FEE       = 'processing_fee';
+    public const TYPE_FUNDS_HELD           = 'funds_held';
+    public const TYPE_FUNDS_RELEASED       = 'funds_released';
+    public const TYPE_REFUND               = 'refund';
+    public const TYPE_WITHDRAWAL           = 'withdrawal';
+    public const TYPE_WITHDRAWAL_FEE       = 'withdrawal_fee';
+    public const TYPE_ADJUSTMENT           = 'adjustment';
+    public const TYPE_FEATURED_JOB_FEE     = 'featured_job_fee';
+    public const TYPE_FEATURED_PROFILE_FEE = 'featured_profile_fee';
+    public const TYPE_WALLET_DEPOSIT       = 'wallet_deposit';
 
     // ── Direction constants ───────────────────────────────────────────────
     public const DIR_CREDIT = 'credit';

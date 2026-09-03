@@ -67,6 +67,9 @@ class ChapaProvider implements PaymentProviderInterface
         try {
             $callbackUrl = config('payment.chapa.callback_url', url('/api/v1/webhooks/deposit/chapa'));
             $returnUrl = $metadata['return_url'] ?? config('payment.chapa.return_url', url('/wallet'));
+            // Append payment reference so frontend can poll status after return
+            $separator = str_contains($returnUrl, '?') ? '&' : '?';
+            $returnUrl .= $separator . 'ref=' . urlencode($reference);
 
             $payload = [
                 'key'          => $this->publicKey,
@@ -281,28 +284,40 @@ class ChapaProvider implements PaymentProviderInterface
     {
         try {
             $accountName = $recipient['account_name'] ?? '';
-            $accountNumber = $recipient['account_number'] ?? $recipient['phone'] ?? '';
+            if (empty($accountName)) {
+                $accountName = $recipient['bank_name'] ?? $recipient['provider'] ?? 'Payout';
+            }
+            $accountNumber = $recipient['account_number'] ?? '';
             $bankCode = $recipient['bank_code'] ?? null;
 
             if (empty($accountNumber)) {
                 return [
                     'success'            => false,
                     'provider_reference' => null,
-                    'error'              => 'Recipient account number is required.',
+                    'error'              => 'Recipient account number is required. Please update your payout details.',
+                ];
+            }
+
+            if (empty($bankCode)) {
+                return [
+                    'success'            => false,
+                    'provider_reference' => null,
+                    'error'              => 'Bank code is required. Please select a valid bank or mobile money provider.',
                 ];
             }
 
             $payload = [
-                'title'         => 'Withdrawal ' . $reference,
-                'currency'      => $currency,
-                'amount'        => number_format($amount, 2, '.', ''),
-                'account_name'  => $accountName,
+                'account_name'   => $accountName,
                 'account_number' => $accountNumber,
-                'reference'     => $reference,
+                'amount'         => number_format($amount, 2, '.', ''),
+                'currency'       => $currency,
+                'bank_code'      => (int) $bankCode,
+                'reference'      => $reference,
             ];
 
-            if ($bankCode) {
-                $payload['bank_code'] = $bankCode;
+            // In test mode, simulate the transfer status
+            if (config('app.env') !== 'production') {
+                $payload['status'] = 'success';
             }
 
             Log::info('[Chapa] Initiating transfer', [
@@ -315,15 +330,18 @@ class ChapaProvider implements PaymentProviderInterface
 
             if ($response->failed()) {
                 $error = $this->extractError($response);
+                $body = $response->json() ?? [];
                 Log::error('[Chapa] Transfer failed', [
                     'reference'   => $reference,
                     'status_code' => $response->status(),
                     'error'       => $error,
+                    'body'        => $body,
                 ]);
 
                 return [
                     'success'            => false,
                     'provider_reference' => null,
+                    'provider_response'  => $body,
                     'error'              => $error,
                 ];
             }
@@ -331,15 +349,19 @@ class ChapaProvider implements PaymentProviderInterface
             $body = $response->json();
             $data = $body['data'] ?? [];
 
+            // Chapa returns data as string (reference) or array
+            $providerRef = is_array($data) ? ($data['ref'] ?? $reference) : $data;
+
             Log::info('[Chapa] Transfer successful', [
                 'reference' => $reference,
-                'ref'       => $data['ref'] ?? null,
+                'ref'       => $providerRef,
+                'body'      => $body,
             ]);
 
             return [
                 'success'            => true,
-                'provider_reference' => $data['ref'] ?? $reference,
-                'provider_response'  => $data,
+                'provider_reference' => $providerRef,
+                'provider_response'  => $body,
                 'error'              => null,
             ];
         } catch (\Exception $e) {
@@ -352,6 +374,59 @@ class ChapaProvider implements PaymentProviderInterface
                 'success'            => false,
                 'provider_reference' => null,
                 'error'              => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Verify a transfer/payout by its reference.
+     * Used by reconciliation to check stuck processing withdrawals.
+     *
+     * @see https://developer.chapa.co/transfer/verify-transfers
+     */
+    public function verifyTransfer(string $reference): array
+    {
+        try {
+            $response = $this->httpClient()->get($this->baseUrl . '/v1/transfers/verify/' . $reference);
+
+            if ($response->failed()) {
+                return [
+                    'status' => 'unknown',
+                    'error'  => $this->extractError($response),
+                ];
+            }
+
+            $body = $response->json();
+            $data = $body['data'] ?? [];
+
+            $chapaStatus = strtolower($data['status'] ?? $body['status'] ?? 'unknown');
+            $status = match ($chapaStatus) {
+                'success'   => 'completed',
+                'failed'    => 'failed',
+                'pending'   => 'processing',
+                'reverted'  => 'failed',
+                default     => 'unknown',
+            };
+
+            Log::info('[Chapa] Transfer verified', [
+                'reference' => $reference,
+                'status'    => $status,
+            ]);
+
+            return [
+                'status' => $status,
+                'data'   => $data,
+                'error'  => null,
+            ];
+        } catch (\Exception $e) {
+            Log::error('[Chapa] Verify transfer exception', [
+                'reference' => $reference,
+                'error'     => $e->getMessage(),
+            ]);
+
+            return [
+                'status' => 'unknown',
+                'error'  => $e->getMessage(),
             ];
         }
     }

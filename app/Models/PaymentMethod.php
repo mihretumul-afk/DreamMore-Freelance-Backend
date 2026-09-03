@@ -37,7 +37,9 @@ class PaymentMethod extends Model
         'cardholder_name',
         'bank_name',
         'account_name',
+        'account_number_encrypted',
         'masked_account_number',
+        'bank_code',
         'mobile_provider',
         'masked_phone',
         'is_default',
@@ -49,6 +51,19 @@ class PaymentMethod extends Model
         'is_default' => 'boolean',
         'is_verified' => 'boolean',
         'metadata'   => 'array',
+        'account_number_encrypted' => 'encrypted',
+        'bank_code' => 'integer',
+    ];
+
+    /**
+     * Fields hidden from JSON/array serialization.
+     * account_number_encrypted is NEVER exposed to the frontend —
+     * it's only decrypted internally at the moment of calling Chapa's payout API.
+     */
+    protected $hidden = [
+        'account_number_encrypted',
+        'bank_code',
+        'provider_token',
     ];
 
     public function user(): BelongsTo

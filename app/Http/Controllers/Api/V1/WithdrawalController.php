@@ -175,7 +175,12 @@ class WithdrawalController extends BaseApiController
         $monthlyLimit = $budget ? (float) $budget->monthly_limit : 0;
         $budgetRemaining = $monthlyLimit > 0 ? max(0, $monthlyLimit - (float) $monthlySpent) : 0;
 
+        // Get wallet balance (actual available funds)
+        $wallet = \App\Models\Wallet::where('user_id', $user->id)->first();
+        $walletBalance = $wallet ? (float) $wallet->available_balance : 0;
+
         return $this->sendResponse([
+            'available_balance' => $walletBalance,
             'account_balance'   => $budgetRemaining,
             'monthly_limit'     => $monthlyLimit,
             'monthly_spent'     => (float) $monthlySpent,

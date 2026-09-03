@@ -27,7 +27,7 @@ class SavedFreelancerController extends BaseApiController
             ->paginate(15);
 
         return $this->sendResponse(
-            SavedFreelancerResource::collection($saved),
+            SavedFreelancerResource::collection($saved)->resolve($request),
             'Saved freelancers retrieved successfully.',
             200,
             $this->paginationMeta($saved)

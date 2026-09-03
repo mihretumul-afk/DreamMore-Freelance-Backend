@@ -126,6 +126,50 @@ class FreelancerApprovalController extends BaseApiController
             $freelancer->user->update(['status' => 'active']);
         }
 
+        // Auto-approve all pending credentials and verifications for this freelancer
+        // so they can immediately submit proposals (the verified.freelancer middleware
+        // requires both profile approval AND at least one approved credential/verification).
+        $userId = $freelancer->user_id;
+        $now = now();
+
+        $approvedCredentialIds = Credential::where('user_id', $userId)
+            ->where('status', 'pending')
+            ->pluck('id');
+
+        if ($approvedCredentialIds->isNotEmpty()) {
+            Credential::whereIn('id', $approvedCredentialIds)->update([
+                'status'      => 'approved',
+                'reviewed_at' => $now,
+            ]);
+
+            // Notify about each approved credential
+            foreach ($approvedCredentialIds as $credId) {
+                $credential = Credential::find($credId);
+                if ($credential) {
+                    NotificationService::credentialApproved($userId, $credential->title);
+                }
+            }
+        }
+
+        $approvedVerificationIds = Verification::where('user_id', $userId)
+            ->where('status', 'pending')
+            ->pluck('id');
+
+        if ($approvedVerificationIds->isNotEmpty()) {
+            Verification::whereIn('id', $approvedVerificationIds)->update([
+                'status'      => 'approved',
+                'reviewed_at' => $now,
+            ]);
+
+            // Notify about verification approval
+            NotificationService::verificationApproved($userId, 'freelancer');
+
+            // Set email_verified_at if not already set
+            if ($freelancer->user && !$freelancer->user->email_verified_at) {
+                $freelancer->user->update(['email_verified_at' => $now]);
+            }
+        }
+
         // Notify the freelancer
         NotificationService::freelancerApproved($freelancer->user_id);
 

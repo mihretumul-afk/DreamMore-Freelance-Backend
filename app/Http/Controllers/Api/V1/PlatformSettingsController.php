@@ -26,6 +26,10 @@ class PlatformSettingsController extends BaseApiController
             'maintenance_mode'     => AdminSetting::getValue('maintenance_mode', 'false', 'boolean'),
             'platform_fee_percent' => (float) $platformFee,
             'auto_approve_days'    => (int) $autoApprove,
+
+            // Featured Listing settings (public for frontend feature detection)
+            'featured_jobs_enabled'     => AdminSetting::getValue('featured_jobs_enabled', 'false', 'boolean'),
+            'featured_profiles_enabled' => AdminSetting::getValue('featured_profiles_enabled', 'false', 'boolean'),
         ];
 
         return $this->sendResponse($settings, 'Platform settings retrieved successfully.');

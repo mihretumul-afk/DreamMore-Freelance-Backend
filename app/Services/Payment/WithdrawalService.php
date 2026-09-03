@@ -51,6 +51,13 @@ class WithdrawalService
                 throw new \RuntimeException('Withdrawal amount must be greater than zero.');
             }
 
+            $minWithdrawal = (float) config('payment.min_withdrawal', 100);
+            if ($amount < $minWithdrawal) {
+                throw new \RuntimeException(
+                    "Minimum withdrawal amount is " . number_format($minWithdrawal) . " ETB."
+                );
+            }
+
             if ((float) $wallet->available_balance < $amount) {
                 throw new \RuntimeException('Insufficient available balance.');
             }
@@ -74,36 +81,40 @@ class WithdrawalService
                 'status'            => Withdrawal::STATUS_REQUESTED,
             ]);
 
-            // Audit
-            AuditService::withdrawalRequested($withdrawal->id, $userId, [
-                'reference'  => $reference,
-                'amount'     => $amount,
-                'fee'        => $fee,
-                'net_amount' => $netAmount,
-                'currency'   => 'ETB',
-            ]);
-
-            // Notify user
-            NotificationService::withdrawalRequested(
-                $userId,
-                $reference,
-                $amount,
-                $fee,
-                $netAmount
-            );
-
-            // Broadcast finance update
-            \App\Events\FinanceUpdated::dispatch('withdrawal_requested', [
-                'withdrawal_id' => $withdrawal->id,
-                'reference'     => $reference,
-                'amount'        => $amount,
-                'fee'           => $fee,
-                'net_amount'    => $netAmount,
-                'user_id'       => $userId,
-            ], $userId);
-
             // Auto-process the withdrawal immediately (no admin approval needed)
             $this->process($withdrawal);
+
+            // Only send "requested" notification if process() didn't already fail it
+            $withdrawal->refresh();
+            if ($withdrawal->status !== Withdrawal::STATUS_FAILED) {
+                // Audit
+                AuditService::withdrawalRequested($withdrawal->id, $userId, [
+                    'reference'  => $reference,
+                    'amount'     => $amount,
+                    'fee'        => $fee,
+                    'net_amount' => $netAmount,
+                    'currency'   => 'ETB',
+                ]);
+
+                // Notify user
+                NotificationService::withdrawalRequested(
+                    $userId,
+                    $reference,
+                    $amount,
+                    $fee,
+                    $netAmount
+                );
+
+                // Broadcast finance update
+                \App\Events\FinanceUpdated::dispatch('withdrawal_requested', [
+                    'withdrawal_id' => $withdrawal->id,
+                    'reference'     => $reference,
+                    'amount'        => $amount,
+                    'fee'           => $fee,
+                    'net_amount'    => $netAmount,
+                    'user_id'       => $userId,
+                ], $userId);
+            }
 
             return $withdrawal;
         });
@@ -124,17 +135,41 @@ class WithdrawalService
             $wallet = Wallet::where('user_id', $withdrawal->user_id)->first();
             $paymentMethod = $withdrawal->paymentMethod;
 
+            // Build recipient details from PaymentMethod
+            $recipient = [
+                'user_id'           => $withdrawal->user_id,
+                'payment_method_id' => $withdrawal->payment_method_id,
+                'type'              => $paymentMethod?->type,
+                'provider'          => $paymentMethod?->provider,
+            ];
+
+            // Extract actual payout destination from PaymentMethod
+            if ($paymentMethod) {
+                $recipient['account_name']   = $paymentMethod->account_name ?? '';
+                $recipient['account_number'] = $paymentMethod->account_number_encrypted ?? '';
+                $recipient['bank_code']      = $paymentMethod->bank_code ?? null;
+                $recipient['bank_name']      = $paymentMethod->bank_name ?? '';
+            }
+
+            // Validate recipient details before calling provider
+            if (empty($recipient['account_number']) || empty($recipient['bank_code'])) {
+                $withdrawal->update([
+                    'status'         => Withdrawal::STATUS_FAILED,
+                    'failure_reason' => 'Payout details incomplete. Please update your payment method with your full account number and bank.',
+                ]);
+
+                // Restore funds
+                $wallet->releaseReservation((float) $withdrawal->amount, 'Payout details incomplete: ' . $withdrawal->reference);
+
+                throw new \RuntimeException('Your payout details are incomplete. Please update your payment method with your full account number and bank before withdrawing.');
+            }
+
             // Call provider
             $result = $this->provider->payout(
                 (float) $withdrawal->net_amount,
                 $withdrawal->currency,
                 $withdrawal->reference,
-                [
-                    'user_id'           => $withdrawal->user_id,
-                    'payment_method_id' => $withdrawal->payment_method_id,
-                    'type'              => $paymentMethod?->type,
-                    'provider'          => $paymentMethod?->provider,
-                ]
+                $recipient
             );
 
             if ($result['success']) {
@@ -182,8 +217,9 @@ class WithdrawalService
                 ], $withdrawal->user_id);
             } else {
                 $withdrawal->update([
-                    'status'         => Withdrawal::STATUS_FAILED,
-                    'failure_reason' => $result['error'] ?? 'Withdrawal failed',
+                    'status'          => Withdrawal::STATUS_FAILED,
+                    'failure_reason'  => $result['error'] ?? 'Withdrawal failed',
+                    'provider_response' => $result['provider_response'] ?? null,
                 ]);
 
                 // Return funds to available balance
@@ -235,16 +271,22 @@ class WithdrawalService
 
     private function recordLedgerEntry(int $userId, float $amount, string $direction, string $type, string $description): void
     {
+        $wallet = Wallet::forUser($userId);
+        $currentBalance = (float) ($wallet->available_balance ?? 0.00);
+
         Transaction::create([
-            'reference'   => Transaction::generateReference(),
-            'user_id'     => $userId,
-            'direction'   => $direction,
-            'type'        => $type,
-            'amount'      => $amount,
-            'fee'         => 0,
-            'currency'    => 'ETB',
-            'status'      => 'completed',
-            'description' => $description,
+            'reference'      => Transaction::generateReference(),
+            'user_id'        => $userId,
+            'wallet_id'      => $wallet->id,
+            'direction'      => $direction,
+            'type'           => $type,
+            'amount'         => $amount,
+            'balance_before' => $currentBalance,
+            'balance_after'  => $currentBalance,
+            'fee'            => 0,
+            'currency'       => 'ETB',
+            'status'         => 'completed',
+            'description'    => $description,
         ]);
     }
 }

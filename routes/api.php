@@ -249,6 +249,10 @@ use App\Http\Controllers\Api\V1\AddFundsController;
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/wallet/deposit', [AddFundsController::class, 'initiate']);
     Route::get('/wallet/deposit/{payment}', [AddFundsController::class, 'status']);
+    // Reconcile a specific deposit by reference (called after Chapa checkout return)
+    Route::post('/wallet/deposit/reconcile/{reference}', [AddFundsController::class, 'reconcile']);
+    // Reconcile ALL pending deposits for the user (called on page load)
+    Route::post('/wallet/deposit/reconcile-all', [AddFundsController::class, 'reconcileAll']);
 });
 
 // Webhook for deposit confirmation (no auth — provider calls directly)

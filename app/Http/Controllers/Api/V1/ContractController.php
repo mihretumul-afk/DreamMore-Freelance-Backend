@@ -33,7 +33,7 @@ class ContractController extends BaseApiController
         $contracts = $query->orderByDesc('created_at')->paginate(15);
 
         return $this->sendResponse(
-            ContractResource::collection($contracts),
+            ContractResource::collection($contracts)->resolve($request),
             'Contracts retrieved successfully.',
             200,
             [

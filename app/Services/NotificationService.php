@@ -589,4 +589,23 @@ class NotificationService
             '/admin/freelancers?status=pending'
         );
     }
+
+    /**
+     * Notify user that wallet deposit was confirmed.
+     */
+    public static function walletDepositCompleted(int $userId, string $reference, float $amount, float $newBalance): Notification
+    {
+        $formatted = 'ETB ' . number_format($amount, 2);
+        $balanceFormatted = 'ETB ' . number_format($newBalance, 2);
+        $role = \App\Models\User::find($userId)?->role ?? 'freelancer';
+        $link = $role === 'employer' ? '/employer/settings/payment-methods' : '/freelancer/withdrawals';
+
+        return self::create(
+            $userId,
+            'wallet_deposit_completed',
+            'Funds Added Successfully',
+            "{$formatted} has been added to your wallet. New balance: {$balanceFormatted}.",
+            $link
+        );
+    }
 }

@@ -20,6 +20,14 @@ class SettingController extends BaseApiController
         'max_proposal_amount'  => ['value' => '', 'type' => 'string'],
         'registration_open'    => ['value' => 'true', 'type' => 'boolean'],
         'maintenance_mode'     => ['value' => 'false', 'type' => 'boolean'],
+
+        // Featured Listing settings
+        'featured_jobs_enabled'             => ['value' => 'false', 'type' => 'boolean'],
+        'featured_profiles_enabled'         => ['value' => 'false', 'type' => 'boolean'],
+        'featured_job_price'                => ['value' => '150', 'type' => 'string'],
+        'featured_job_duration_days'        => ['value' => '7', 'type' => 'integer'],
+        'featured_profile_price'            => ['value' => '100', 'type' => 'string'],
+        'featured_profile_duration_days'    => ['value' => '7', 'type' => 'integer'],
     ];
 
     /**
@@ -46,6 +54,14 @@ class SettingController extends BaseApiController
             'access'   => [
                 'registration_open' => $raw['registration_open'],
                 'maintenance_mode'  => $raw['maintenance_mode'],
+            ],
+            'featured' => [
+                'featured_jobs_enabled'             => $raw['featured_jobs_enabled'],
+                'featured_profiles_enabled'         => $raw['featured_profiles_enabled'],
+                'featured_job_price'                => $raw['featured_job_price'],
+                'featured_job_duration_days'        => $raw['featured_job_duration_days'],
+                'featured_profile_price'            => $raw['featured_profile_price'],
+                'featured_profile_duration_days'    => $raw['featured_profile_duration_days'],
             ],
         ];
 

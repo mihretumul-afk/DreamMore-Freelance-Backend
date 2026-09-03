@@ -9,9 +9,15 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('transactions', function (Blueprint $table) {
-            $table->unsignedBigInteger('wallet_id')->nullable()->after('user_id');
-            $table->decimal('balance_before', 12, 2)->default(0)->after('amount');
-            $table->decimal('balance_after', 12, 2)->default(0)->after('balance_before');
+            if (!Schema::hasColumn('transactions', 'wallet_id')) {
+                $table->unsignedBigInteger('wallet_id')->nullable()->after('user_id');
+            }
+            if (!Schema::hasColumn('transactions', 'balance_before')) {
+                $table->decimal('balance_before', 12, 2)->default(0)->after('amount');
+            }
+            if (!Schema::hasColumn('transactions', 'balance_after')) {
+                $table->decimal('balance_after', 12, 2)->default(0)->after('balance_before');
+            }
         });
     }
 

@@ -28,7 +28,7 @@ class SkillController extends BaseApiController
             ->get();
 
         return $this->sendResponse(
-            SkillResource::collection($skills),
+            SkillResource::collection($skills)->resolve($request),
             'Skills retrieved successfully.'
         );
     }

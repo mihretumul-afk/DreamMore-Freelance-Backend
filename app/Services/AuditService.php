@@ -584,6 +584,27 @@ class AuditService
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // WALLET DEPOSIT actions
+    // ═══════════════════════════════════════════════════════════════════
+
+    public static function walletDepositConfirmed(int $paymentId, int $userId, array $context = []): AuditLog
+    {
+        $label     = self::actorLabel($userId);
+        $reference = $context['reference'] ?? "Payment #{$paymentId}";
+        $amount    = isset($context['amount'], $context['currency'])
+            ? "{$context['currency']} {$context['amount']}"
+            : '';
+        $provider = $context['provider'] ?? '';
+        $amountPart = $amount ? " — {$amount}" : '';
+        $providerPart = $provider ? " via {$provider}" : '';
+        return self::log(
+            AuditLog::ACTION_WALLET_DEPOSIT_CONFIRMED, AuditLog::MODULE_PAYMENTS,
+            'Payment', $paymentId, $context, $userId,
+            "{$label} wallet deposit confirmed{$amountPart} ({$reference}){$providerPart}"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // WEBHOOK actions
     // ═══════════════════════════════════════════════════════════════════
 

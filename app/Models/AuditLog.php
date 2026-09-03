@@ -126,6 +126,10 @@ class AuditLog extends Model
     public const ACTION_PAYMENT_FAILED       = 'payment.failed';
     public const ACTION_PAYMENT_CANCELLED    = 'payment.cancelled';
 
+    // ── Action constants — Wallet Deposit ────────────────────────────────
+
+    public const ACTION_WALLET_DEPOSIT_CONFIRMED = 'wallet_deposit.confirmed';
+
     // ── Module constants (additional) ────────────────────────────────────
 
     public const MODULE_WITHDRAWALS = 'withdrawals';

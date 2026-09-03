@@ -103,28 +103,47 @@ class PaymentService
                 'status'             => Payment::STATUS_PENDING,
             ]);
 
-            // Charge via provider
-            $result = $this->provider->charge($amount, 'ETB', $reference, [
-                'user_id'       => $employerId,
-                'milestone_id'  => $milestone->id,
-                'contract_id'   => $contract->id,
-                'payment_id'    => $payment->id,
-            ]);
+            // Try wallet first — if employer has sufficient balance, use it directly
+            $wallet = Wallet::where('user_id', $employerId)->first();
+            $usedWallet = false;
 
-            if (!$result['success']) {
-                $payment->update([
-                    'status'         => Payment::STATUS_FAILED,
-                    'failure_reason' => $result['error'] ?? 'Payment failed',
-                    'failed_at'      => now(),
+            if ($wallet && $wallet->available_balance >= $amount) {
+                // Deduct from wallet available balance → hold in escrow
+                $wallet->decrement('available_balance', $amount);
+                $usedWallet = true;
+
+                Log::info('[Payment] Milestone funded from wallet', [
+                    'reference'  => $reference,
+                    'employer_id' => $employerId,
+                    'amount'     => $amount,
+                    'new_balance' => $wallet->fresh()->available_balance,
                 ]);
-                throw new \RuntimeException($result['error'] ?? 'Payment failed. Please try again.');
+            }
+
+            // If wallet didn't have enough, charge via external provider (Chapa checkout)
+            if (!$usedWallet) {
+                $result = $this->provider->charge($amount, 'ETB', $reference, [
+                    'user_id'       => $employerId,
+                    'milestone_id'  => $milestone->id,
+                    'contract_id'   => $contract->id,
+                    'payment_id'    => $payment->id,
+                ]);
+
+                if (!$result['success']) {
+                    $payment->update([
+                        'status'         => Payment::STATUS_FAILED,
+                        'failure_reason' => $result['error'] ?? 'Payment failed',
+                        'failed_at'      => now(),
+                    ]);
+                    throw new \RuntimeException($result['error'] ?? 'Payment failed. Please try again.');
+                }
             }
 
             // Mark payment as completed
             $payment->update([
                 'status'              => Payment::STATUS_COMPLETED,
-                'provider_reference'  => $result['provider_reference'],
-                'provider_response'   => $result['provider_response'] ?? null,
+                'provider_reference'  => $usedWallet ? 'WALLET-' . $reference : ($result['provider_reference'] ?? null),
+                'provider_response'   => $usedWallet ? ['source' => 'wallet'] : ($result['provider_response'] ?? null),
                 'processed_at'        => now(),
             ]);
 
@@ -156,7 +175,7 @@ class PaymentService
                 'milestone_id'   => $milestone->id,
                 'milestone_title' => $milestone->title,
                 'amount'         => $amount,
-                'platform_fee'   => $fees['platform_fee'],
+                'platform_fee'   => 0,
                 'employer_id'    => $employerId,
                 'freelancer_id'  => $contract->freelancer_id,
             ], $employerId);
@@ -398,6 +417,150 @@ class PaymentService
     }
 
     /**
+     * Charge an employer for featuring a job listing.
+     *
+     * 1. Check feature flag is enabled
+     * 2. Check wallet has sufficient balance
+     * 3. Deduct from wallet with row locking
+     * 4. Create FeaturedJob record
+     * 5. Record transaction ledger entry
+     */
+    public function chargeForFeaturedJob(int $jobId, int $employerId): \App\Models\FeaturedJob
+    {
+        // Check feature flag
+        $enabled = \App\Models\AdminSetting::getValue('featured_jobs_enabled', 'false', 'boolean');
+        if (!$enabled) {
+            throw new \RuntimeException('This feature is not currently available.');
+        }
+
+        // Get pricing settings
+        $price = (float) \App\Models\AdminSetting::getValue('featured_job_price', '150', 'string');
+        $durationDays = (int) \App\Models\AdminSetting::getValue('featured_job_duration_days', '7', 'integer');
+
+        if ($price <= 0) {
+            throw new \RuntimeException('Featured job pricing is not configured.');
+        }
+
+        return DB::transaction(function () use ($jobId, $employerId, $price, $durationDays) {
+            // Ensure wallet exists (auto-create with 0 balance if needed)
+            Wallet::forUser($employerId);
+
+            // Lock wallet row to prevent race conditions
+            $wallet = Wallet::where('user_id', $employerId)->lockForUpdate()->first();
+
+            if ((float) $wallet->available_balance < $price) {
+                throw new \RuntimeException(
+                    "Insufficient balance. Required: {$price} ETB, Available: {$wallet->available_balance} ETB."
+                );
+            }
+
+            // Deduct from wallet
+            $wallet->decrement('available_balance', $price);
+
+            // Create FeaturedJob record
+            $featuredJob = \App\Models\FeaturedJob::create([
+                'job_id'        => $jobId,
+                'employer_id'   => $employerId,
+                'amount_paid'   => $price,
+                'duration_days' => $durationDays,
+                'starts_at'     => now(),
+                'expires_at'    => now()->addDays($durationDays),
+                'status'        => \App\Models\FeaturedJob::STATUS_ACTIVE,
+            ]);
+
+            // Record transaction — debit from employer
+            $this->recordLedgerTransaction(
+                $employerId,
+                $price,
+                Transaction::DIR_DEBIT,
+                Transaction::TYPE_FEATURED_JOB_FEE,
+                null,
+                "Featured job listing fee for job #{$jobId} ({$durationDays} days)"
+            );
+
+            Log::info('[Featured Job] Employer charged', [
+                'job_id'      => $jobId,
+                'employer_id' => $employerId,
+                'amount'      => $price,
+                'duration'    => $durationDays,
+            ]);
+
+            return $featuredJob;
+        });
+    }
+
+    /**
+     * Charge a freelancer for featuring their profile.
+     *
+     * 1. Check feature flag is enabled
+     * 2. Check wallet has sufficient balance
+     * 3. Deduct from wallet with row locking
+     * 4. Create FeaturedProfile record
+     * 5. Record transaction ledger entry
+     */
+    public function chargeForFeaturedProfile(int $userId): \App\Models\FeaturedProfile
+    {
+        // Check feature flag
+        $enabled = \App\Models\AdminSetting::getValue('featured_profiles_enabled', 'false', 'boolean');
+        if (!$enabled) {
+            throw new \RuntimeException('This feature is not currently available.');
+        }
+
+        // Get pricing settings
+        $price = (float) \App\Models\AdminSetting::getValue('featured_profile_price', '100', 'string');
+        $durationDays = (int) \App\Models\AdminSetting::getValue('featured_profile_duration_days', '7', 'integer');
+
+        if ($price <= 0) {
+            throw new \RuntimeException('Featured profile pricing is not configured.');
+        }
+
+        return DB::transaction(function () use ($userId, $price, $durationDays) {
+            // Ensure wallet exists (auto-create with 0 balance if needed)
+            Wallet::forUser($userId);
+
+            // Lock wallet row to prevent race conditions
+            $wallet = Wallet::where('user_id', $userId)->lockForUpdate()->first();
+
+            if ((float) $wallet->available_balance < $price) {
+                throw new \RuntimeException(
+                    "Insufficient balance. Required: {$price} ETB, Available: {$wallet->available_balance} ETB."
+                );
+            }
+
+            // Deduct from wallet
+            $wallet->decrement('available_balance', $price);
+
+            // Create FeaturedProfile record
+            $featuredProfile = \App\Models\FeaturedProfile::create([
+                'user_id'       => $userId,
+                'amount_paid'   => $price,
+                'duration_days' => $durationDays,
+                'starts_at'     => now(),
+                'expires_at'    => now()->addDays($durationDays),
+                'status'        => \App\Models\FeaturedProfile::STATUS_ACTIVE,
+            ]);
+
+            // Record transaction — debit from freelancer
+            $this->recordLedgerTransaction(
+                $userId,
+                $price,
+                Transaction::DIR_DEBIT,
+                Transaction::TYPE_FEATURED_PROFILE_FEE,
+                null,
+                "Featured profile listing fee ({$durationDays} days)"
+            );
+
+            Log::info('[Featured Profile] Freelancer charged', [
+                'user_id' => $userId,
+                'amount'  => $price,
+                'duration' => $durationDays,
+            ]);
+
+            return $featuredProfile;
+        });
+    }
+
+    /**
      * Record a ledger transaction.
      */
     private function recordLedgerTransaction(
@@ -409,6 +572,7 @@ class PaymentService
         string $description = ''
     ): void {
         $wallet = Wallet::forUser($userId);
+        $currentBalance = (float) ($wallet->available_balance ?? 0.00);
 
         Transaction::create([
             'reference'      => Transaction::generateReference(),
@@ -418,8 +582,8 @@ class PaymentService
             'direction'      => $direction,
             'type'           => $type,
             'amount'         => $amount,
-            'balance_before' => $wallet->available_balance,
-            'balance_after'  => $wallet->available_balance,
+            'balance_before' => $currentBalance,
+            'balance_after'  => $currentBalance,
             'currency'       => 'ETB',
             'status'         => Transaction::STATUS_COMPLETED,
             'description'    => $description,

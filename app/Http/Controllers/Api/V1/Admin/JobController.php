@@ -33,7 +33,7 @@ class JobController extends BaseApiController
         $jobs = $query->orderByDesc('created_at')->paginate(15);
 
         return $this->sendResponse(
-            JobResource::collection($jobs),
+            JobResource::collection($jobs)->resolve($request),
             'Jobs retrieved successfully.',
             200,
             [

@@ -152,7 +152,24 @@ class CredentialController extends BaseApiController
         $autoVerified = false;
 
         if ($isDreamMore) {
-            // Check if matching LMS certificate already exists in database
+            // Check if this user already submitted a credential with this certificate ID
+            $existingForUser = Credential::where('user_id', $user->id)
+                ->where('lms_certificate_id', $validated['certificate_identifier'])
+                ->orWhere(function ($q) use ($user, $validated) {
+                    $q->where('user_id', $user->id)
+                      ->where('certificate_identifier', $validated['certificate_identifier']);
+                })
+                ->first();
+
+            if ($existingForUser) {
+                return $this->sendError(
+                    'You have already submitted a credential with this certificate ID. You cannot submit duplicates.',
+                    [],
+                    422
+                );
+            }
+
+            // Check if matching LMS certificate already exists in database (from other users)
             $lmsMatch = Credential::where('lms_certificate_id', $validated['certificate_identifier'])
                 ->orWhere('certificate_identifier', $validated['certificate_identifier'])
                 ->first();
@@ -177,24 +194,36 @@ class CredentialController extends BaseApiController
             }
         }
 
-        $credential = Credential::create([
-            'user_id' => $user->id,
-            'title' => $validated['title'],
-            'type' => $validated['type'],
-            'issuing_organization' => $isDreamMore ? 'DreamMore' : ($validated['issuing_organization'] ?? null),
-            'certificate_identifier' => $validated['certificate_identifier'] ?? null,
-            'description' => $validated['description'] ?? null,
-            'issue_date' => $validated['issue_date'] ?? null,
-            'expiry_date' => $validated['expiry_date'] ?? null,
-            'file_path' => $safeName,
-            'file_original_name' => $originalName,
-            'status' => $status,
-            'verification_source' => $verificationSource,
-            'lms_certificate_id' => $isDreamMore ? ($validated['certificate_identifier'] ?? null) : null,
-            'auto_verified' => $autoVerified,
-            'test_required' => $testRequired,
-            'test_status' => $testStatus,
-        ]);
+        try {
+            $credential = Credential::create([
+                'user_id' => $user->id,
+                'title' => $validated['title'],
+                'type' => $validated['type'],
+                'issuing_organization' => $isDreamMore ? 'DreamMore' : ($validated['issuing_organization'] ?? null),
+                'certificate_identifier' => $validated['certificate_identifier'] ?? null,
+                'description' => $validated['description'] ?? null,
+                'issue_date' => $validated['issue_date'] ?? null,
+                'expiry_date' => $validated['expiry_date'] ?? null,
+                'file_path' => $safeName,
+                'file_original_name' => $originalName,
+                'status' => $status,
+                'verification_source' => $verificationSource,
+                'lms_certificate_id' => $isDreamMore ? ($validated['certificate_identifier'] ?? null) : null,
+                'auto_verified' => $autoVerified,
+                'test_required' => $testRequired,
+                'test_status' => $testStatus,
+            ]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Catch duplicate entry constraint violations gracefully
+            if (str_contains($e->getMessage(), 'Duplicate entry')) {
+                return $this->sendError(
+                    'You have already submitted a credential with this certificate ID. You cannot submit duplicates.',
+                    [],
+                    422
+                );
+            }
+            throw $e;
+        }
 
         if ($testRequired) {
             NotificationService::skillTestRequired($user->id, $credential->title, 'Skill Assessment');

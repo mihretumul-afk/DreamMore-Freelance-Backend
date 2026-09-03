@@ -15,3 +15,6 @@ Schedule::command('featured:listings:expire')->daily();
 
 // Reconcile stuck pending deposits (safety net for missed webhooks/polls)
 Schedule::command('payments:reconcile-pending --minutes=5')->everyFiveMinutes();
+
+// Reconcile stuck processing withdrawals (safety net for missed transfer confirmations)
+Schedule::command('payments:reconcile-withdrawals --minutes=10')->everyTenMinutes();

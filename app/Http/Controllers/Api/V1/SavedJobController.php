@@ -26,7 +26,7 @@ class SavedJobController extends BaseApiController
             ->paginate(15);
 
         return $this->sendResponse(
-            SavedJobResource::collection($savedJobs),
+            SavedJobResource::collection($savedJobs)->resolve($request),
             'Saved jobs retrieved successfully.',
             200,
             $this->paginationMeta($savedJobs)

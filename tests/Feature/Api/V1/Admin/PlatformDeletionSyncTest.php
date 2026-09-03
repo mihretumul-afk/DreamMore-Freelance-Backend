@@ -8,7 +8,9 @@ use App\Models\Job;
 use App\Models\SavedFreelancer;
 use App\Models\SavedJob;
 use App\Models\Skill;
+use App\Models\Transaction;
 use App\Models\User;
+use App\Models\Wallet;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -324,6 +326,48 @@ class PlatformDeletionSyncTest extends TestCase
         $catAfter->assertStatus(200);
         $catDataAfter = collect($catAfter->json('data'))->firstWhere('id', $cat->id);
         $this->assertEquals(1, $catDataAfter['jobs_count']);
+    }
+
+    public function test_admin_can_delete_user_with_wallet_and_transaction_records(): void
+    {
+        $user = User::create([
+            'name' => 'Exm test emp',
+            'email' => 'exm-test-emp@example.com',
+            'password' => bcrypt('password'),
+            'role' => 'employer',
+            'status' => 'active',
+        ]);
+
+        $wallet = Wallet::create([
+            'user_id' => $user->id,
+            'available_balance' => 50.00,
+            'pending_balance' => 0.00,
+            'held_balance' => 0.00,
+            'total_earned' => 50.00,
+            'total_withdrawn' => 0.00,
+            'currency' => 'ETB',
+        ]);
+
+        Transaction::create([
+            'reference' => 'TXN-DELETE-1',
+            'user_id' => $user->id,
+            'wallet_id' => $wallet->id,
+            'amount' => 50.00,
+            'balance_before' => 0.00,
+            'balance_after' => 50.00,
+            'currency' => 'ETB',
+            'type' => 'payment',
+            'direction' => 'credit',
+            'status' => 'completed',
+            'description' => 'Test wallet transaction before delete',
+        ]);
+
+        $response = $this->actingAsSanctum($this->admin)
+            ->deleteJson("/api/v1/admin/users/{$user->id}");
+
+        $response->assertStatus(200);
+        $this->assertDatabaseMissing('users', ['id' => $user->id]);
+        $this->assertDatabaseMissing('wallets', ['user_id' => $user->id]);
     }
 
     public function test_admin_deleting_job_directly_removes_it_and_replaces_in_browse(): void

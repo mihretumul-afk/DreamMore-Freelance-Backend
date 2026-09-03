@@ -70,7 +70,7 @@ class FinanceUpdated implements ShouldBroadcast
      */
     public function broadcastAs(): string
     {
-        return 'finance.' . $this->type;
+        return 'finance.updated';
     }
 
     /**

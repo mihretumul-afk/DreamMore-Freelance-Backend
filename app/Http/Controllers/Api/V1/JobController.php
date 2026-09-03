@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Requests\Api\V1\JobRequest;
 use App\Http\Resources\Api\V1\JobResource;
+use App\Models\FeaturedJob;
 use App\Models\Job;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\JsonResponse;
@@ -72,11 +73,28 @@ class JobController extends BaseApiController
             ->when($request->filled('min_budget'), fn ($query) => $query->where('max_budget', '>=', $request->input('min_budget')))
             ->when($request->filled('max_budget'), fn ($query) => $query->where('min_budget', '<=', $request->input('max_budget')))
             ->when($request->filled('status'), fn ($query) => $query->where('status', $request->input('status')))
+            ->select('marketplace_jobs.*')
+            ->selectRaw('(SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM featured_jobs
+                WHERE featured_jobs.job_id = marketplace_jobs.id
+                AND featured_jobs.status = ?
+                AND featured_jobs.expires_at > UTC_TIMESTAMP()
+            ) THEN 1 ELSE 0 END) as is_featured', [FeaturedJob::STATUS_ACTIVE])
+            ->orderByRaw('(SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM featured_jobs
+                WHERE featured_jobs.job_id = marketplace_jobs.id
+                AND featured_jobs.status = ?
+                AND featured_jobs.expires_at > UTC_TIMESTAMP()
+            ) THEN 0 ELSE 1 END)', [FeaturedJob::STATUS_ACTIVE])
             ->orderBy(...$this->resolveSort($request))
             ->paginate(15);
 
+        // Use ->resolve() to get a plain array instead of a ResourceCollection
+        // object. This prevents Laravel from nesting the items under an extra
+        // "data" key during JSON serialization, which would break the frontend's
+        // response.data mapping (making every job.id undefined).
         return $this->sendResponse(
-            JobResource::collection($jobs),
+            JobResource::collection($jobs)->resolve($request),
             'Jobs retrieved successfully.',
             200,
             $this->paginationMeta($jobs)
@@ -108,6 +126,12 @@ class JobController extends BaseApiController
     {
         $job->load(['category', 'skills', 'employer']);
 
+        // Attach featured status
+        $job->is_featured = FeaturedJob::where('job_id', $job->id)
+            ->where('status', FeaturedJob::STATUS_ACTIVE)
+            ->where('expires_at', '>', now())
+            ->exists();
+
         $isPubliclyAvailable = $job->status === 'open' && $job->employer && $job->employer->status === 'active';
 
         if (! $isPubliclyAvailable) {
@@ -123,7 +147,7 @@ class JobController extends BaseApiController
         }
 
         return $this->sendResponse(
-            new JobResource($job),
+            (new JobResource($job))->resolve($request),
             'Job retrieved successfully.'
         );
     }
@@ -145,10 +169,18 @@ class JobController extends BaseApiController
             $query->where('status', $request->input('status'));
         }
 
-        $jobs = $query->orderByDesc('created_at')->paginate(15);
+        $jobs = $query
+            ->select('marketplace_jobs.*')
+            ->selectRaw('(SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM featured_jobs
+                WHERE featured_jobs.job_id = marketplace_jobs.id
+                AND featured_jobs.status = ?
+                AND featured_jobs.expires_at > UTC_TIMESTAMP()
+            ) THEN 1 ELSE 0 END) as is_featured', [FeaturedJob::STATUS_ACTIVE])
+            ->orderByDesc('created_at')->paginate(15);
 
         return $this->sendResponse(
-            JobResource::collection($jobs),
+            JobResource::collection($jobs)->resolve($request),
             'Your jobs retrieved successfully.',
             200,
             $this->paginationMeta($jobs)
@@ -187,7 +219,7 @@ class JobController extends BaseApiController
         $job->load(['category', 'skills', 'employer']);
 
         return $this->sendResponse(
-            new JobResource($job),
+            (new JobResource($job))->resolve($request),
             'Job created successfully.',
             201
         );
@@ -231,7 +263,7 @@ class JobController extends BaseApiController
         $job->load(['category', 'skills', 'employer']);
 
         return $this->sendResponse(
-            new JobResource($job->fresh()),
+            (new JobResource($job->fresh()))->resolve($request),
             'Job updated successfully.'
         );
     }
@@ -326,7 +358,7 @@ class JobController extends BaseApiController
         $job->load(['category', 'skills', 'employer']);
 
         return $this->sendResponse(
-            new JobResource($job->fresh()),
+            (new JobResource($job->fresh()))->resolve($request),
             $newStatus === 'closed' ? 'Job closed successfully.' : 'Job reopened successfully.'
         );
     }
