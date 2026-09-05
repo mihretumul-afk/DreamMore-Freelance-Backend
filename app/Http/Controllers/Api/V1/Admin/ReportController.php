@@ -285,7 +285,7 @@ class ReportController extends BaseApiController
 
         $actor = request()->user();
 
-        DB::transaction(function () use ($report) {
+        DB::transaction(function () use ($report, $actor) {
             $report->update([
                 'status'      => 'dismissed',
                 'resolved_at' => now(),

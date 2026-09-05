@@ -19,6 +19,9 @@ class PlatformWithdrawal extends Model
         'bank_name',
         'bank_code',
         'description',
+        'provider',
+        'provider_reference',
+        'failure_reason',
         'processed_by',
         'completed_at',
     ];

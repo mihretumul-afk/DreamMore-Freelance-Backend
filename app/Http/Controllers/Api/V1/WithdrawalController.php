@@ -92,6 +92,33 @@ class WithdrawalController extends BaseApiController
     }
 
     /**
+     * Remove a withdrawal entry from the user's history.
+     *
+     * Only settled (completed/failed/cancelled/rejected) withdrawals can be
+     * deleted. Active ones are protected because funds are still reserved.
+     */
+    public function destroy(Request $request, Withdrawal $withdrawal): JsonResponse
+    {
+        $user = $request->user();
+
+        if (!$user->isAdmin() && $withdrawal->user_id !== $user->id) {
+            return $this->sendForbidden('You do not have access to this withdrawal.');
+        }
+
+        if (!$withdrawal->isDeletable()) {
+            return $this->sendError(
+                'Only completed, failed, cancelled or rejected withdrawals can be deleted.',
+                [],
+                422
+            );
+        }
+
+        $withdrawal->delete();
+
+        return $this->sendResponse(null, 'Withdrawal history entry deleted.');
+    }
+
+    /**
      * Get user's wallet/earnings summary.
      */
     public function earnings(Request $request): JsonResponse

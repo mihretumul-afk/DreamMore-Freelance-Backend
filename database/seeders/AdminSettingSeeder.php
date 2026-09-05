@@ -12,7 +12,6 @@ class AdminSettingSeeder extends Seeder
         $defaults = [
             'platform_name'        => ['value' => 'Dream More AppWorks', 'type' => 'string'],
             'platform_description' => ['value' => 'The Ethiopian freelance marketplace', 'type' => 'string'],
-            'support_email'        => ['value' => 'support@dreammore.com', 'type' => 'string'],
             'default_currency'     => ['value' => 'ETB', 'type' => 'string'],
             'min_proposal_amount'  => ['value' => '', 'type' => 'string'],
             'max_proposal_amount'  => ['value' => '', 'type' => 'string'],

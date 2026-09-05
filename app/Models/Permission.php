@@ -50,6 +50,9 @@ class Permission extends Model
     public const DISPUTES_RESOLVE  = 'disputes.resolve';
     public const DISPUTES_ESCALATE = 'disputes.escalate';
 
+    // Contacts (footer Contact button)
+    public const CONTACTS_MANAGE = 'contacts.manage';
+
     // Administrators
     public const ADMINS_VIEW        = 'admins.view';
     public const ADMINS_CREATE      = 'admins.create';

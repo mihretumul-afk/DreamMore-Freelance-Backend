@@ -20,7 +20,12 @@ class PlatformSettingsController extends BaseApiController
         $settings = [
             'platform_name'        => AdminSetting::getValue('platform_name', 'Dream More AppWorks', 'string'),
             'platform_description' => AdminSetting::getValue('platform_description', 'The Ethiopian freelance marketplace', 'string'),
-            'support_email'        => AdminSetting::getValue('support_email', 'support@dreammore.com', 'string'),
+            'contact_email'        => AdminSetting::getValue('contact_email', 'support@appworks.et', 'string'),
+            'contact_phone'        => AdminSetting::getValue('contact_phone', '+251 911 234 567', 'string'),
+            'contact_location'     => AdminSetting::getValue('contact_location', 'Addis Ababa, Ethiopia', 'string'),
+            'contact_hours'        => AdminSetting::getValue('contact_hours', 'Mon–Fri, 9:00 AM – 6:00 PM (EAT)', 'string'),
+            'contact_extras'       => self::extraContacts(),
+            'social_links'         => self::socialLinks(),
             'default_currency'     => AdminSetting::getValue('default_currency', 'ETB', 'string'),
             'registration_open'    => AdminSetting::getValue('registration_open', 'true', 'boolean'),
             'maintenance_mode'     => AdminSetting::getValue('maintenance_mode', 'false', 'boolean'),
@@ -59,5 +64,25 @@ class PlatformSettingsController extends BaseApiController
             'platform_fee_percent' => (float) PlatformSetting::get('platform_fee_percent', '8'),
             'auto_approve_days' => (int) PlatformSetting::get('auto_approve_days', '5'),
         ], 'Platform fee updated successfully.');
+    }
+
+    /**
+     * Additional contacts added by admins (Admin → Settings → General).
+     * Stored as a JSON-typed AdminSetting value; decoded to an array here.
+     */
+    private static function extraContacts(): array
+    {
+        $extras = AdminSetting::getValue('contact_extras', '[]', 'json');
+        return is_array($extras) ? array_values($extras) : [];
+    }
+
+    /**
+     * Social media links shown in the footer (Admin → Settings → General).
+     * Stored as a JSON-typed AdminSetting value; decoded to an array here.
+     */
+    private static function socialLinks(): array
+    {
+        $links = AdminSetting::getValue('social_links', [], 'json');
+        return is_array($links) ? array_values($links) : [];
     }
 }

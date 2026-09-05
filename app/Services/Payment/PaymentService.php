@@ -474,7 +474,7 @@ class PaymentService
             throw new \RuntimeException('Featured job pricing is not configured.');
         }
 
-        return DB::transaction(function () use ($jobId, $employerId, $price, $durationDays) {
+        $featuredJob = DB::transaction(function () use ($jobId, $employerId, $price, $durationDays) {
             // Ensure wallet exists (auto-create with 0 balance if needed)
             Wallet::forUser($employerId);
 
@@ -520,6 +520,17 @@ class PaymentService
 
             return $featuredJob;
         });
+
+        // Broadcast AFTER the transaction commits so the admin finance dashboard
+        // (single platform balance card) refreshes when featured revenue is received.
+        \App\Events\FinanceUpdated::dispatch('featured_job_charged', [
+            'featured_job_id' => $featuredJob->id,
+            'job_id'          => $jobId,
+            'amount'          => (float) $featuredJob->amount_paid,
+            'user_id'         => $employerId,
+        ], $employerId);
+
+        return $featuredJob;
     }
 
     /**
@@ -547,7 +558,7 @@ class PaymentService
             throw new \RuntimeException('Featured profile pricing is not configured.');
         }
 
-        return DB::transaction(function () use ($userId, $price, $durationDays) {
+        $featuredProfile = DB::transaction(function () use ($userId, $price, $durationDays) {
             // Ensure wallet exists (auto-create with 0 balance if needed)
             Wallet::forUser($userId);
 
@@ -591,6 +602,16 @@ class PaymentService
 
             return $featuredProfile;
         });
+
+        // Broadcast AFTER the transaction commits so the admin finance dashboard
+        // (single platform balance card) refreshes when featured revenue is received.
+        \App\Events\FinanceUpdated::dispatch('featured_profile_charged', [
+            'featured_profile_id' => $featuredProfile->id,
+            'user_id'             => $userId,
+            'amount'              => (float) $featuredProfile->amount_paid,
+        ], $userId);
+
+        return $featuredProfile;
     }
 
     /**

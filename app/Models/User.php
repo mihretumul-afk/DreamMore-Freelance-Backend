@@ -23,6 +23,7 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'google_id',
         'role',
         'status',
         'phone',
@@ -76,10 +77,14 @@ class User extends Authenticatable
             // relations. Delete the child records first, in dependency order, so the
             // user row can be removed without triggering database-level 1451/23000
             // exceptions on MySQL and SQLite.
-            $user->transactions()->delete();
-            $user->withdrawals()->delete();
-            $user->paymentsAsPayer()->delete();
-            $user->paymentsAsPayee()->delete();
+            //
+            // Transactions/withdrawals/payments use SoftDeletes (so users can remove
+            // history entries), therefore they must be force-deleted here — otherwise
+            // soft-deleted rows would still block removal of the user row.
+            Transaction::where('user_id', $user->id)->withTrashed()->forceDelete();
+            Withdrawal::where('user_id', $user->id)->withTrashed()->forceDelete();
+            Payment::where('payer_id', $user->id)->withTrashed()->forceDelete();
+            Payment::where('payee_id', $user->id)->withTrashed()->forceDelete();
             $user->paymentMethods()->delete();
             $user->wallet()->delete();
             $user->employerBudgets()->delete();
@@ -283,5 +288,13 @@ class User extends Authenticatable
         }
 
         return 'unverified';
+    }
+
+    /**
+     * Send password reset notification using custom ResetPasswordNotification.
+     */
+    public function sendPasswordResetNotification($token): void
+    {
+        $this->notify(new \App\Notifications\ResetPasswordNotification($token));
     }
 }

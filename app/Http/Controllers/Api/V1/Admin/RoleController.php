@@ -124,8 +124,8 @@ class RoleController extends BaseApiController
             'is_active'   => ['sometimes', 'boolean'],
         ]);
 
-        // System roles cannot be renamed or deactivated via this endpoint.
-        if ($role->is_system && isset($validated['name'])) {
+        // System roles cannot be renamed via this endpoint.
+        if ($role->is_system && isset($validated['name']) && $validated['name'] !== $role->name) {
             return $this->sendError('System role names cannot be changed.', [], 422);
         }
 
@@ -152,7 +152,8 @@ class RoleController extends BaseApiController
 
     /**
      * DELETE /api/v1/admin/roles/{role}
-     * Restricted to Super Admin (roles.delete). System roles cannot be deleted.
+     * Restricted to Super Admin (roles.delete). The Super Admin role itself
+     * is protected and cannot be deleted; other built-in roles may be removed.
      */
     public function destroy(Request $request, Role $role): JsonResponse
     {
@@ -160,8 +161,8 @@ class RoleController extends BaseApiController
             return $this->sendForbidden('Only Super Admin can delete roles.');
         }
 
-        if ($role->is_system) {
-            return $this->sendError('System roles cannot be deleted.', [], 422);
+        if ($role->slug === Role::SUPER_ADMIN) {
+            return $this->sendError('The Super Admin role cannot be deleted.', [], 422);
         }
 
         DB::transaction(function () use ($role, $request) {
@@ -181,6 +182,10 @@ class RoleController extends BaseApiController
     /**
      * PUT /api/v1/admin/roles/{role}/permissions
      * Sync permissions on a role. Restricted to Super Admin (roles.assign).
+     *
+     * The Super Admin role's permission list may also be edited here. Note that
+     * this only customises which permissions are recorded/displayed on the role
+     * — Super Admin users still retain full platform access.
      */
     public function syncPermissions(Request $request, Role $role): JsonResponse
     {
@@ -192,11 +197,6 @@ class RoleController extends BaseApiController
             'permissions'   => ['required', 'array'],
             'permissions.*' => ['string', 'exists:permissions,slug'],
         ]);
-
-        // Super Admin role always retains all permissions — cannot be reduced.
-        if ($role->slug === Role::SUPER_ADMIN) {
-            return $this->sendError('Super Admin role permissions cannot be modified.', [], 422);
-        }
 
         $oldSlugs = $role->permissions()->pluck('slug')->sort()->values()->all();
 

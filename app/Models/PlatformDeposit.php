@@ -16,6 +16,9 @@ class PlatformDeposit extends Model
         'status',
         'description',
         'source',
+        'provider',
+        'provider_reference',
+        'failure_reason',
         'deposited_by',
         'completed_at',
     ];

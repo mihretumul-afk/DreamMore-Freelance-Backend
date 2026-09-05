@@ -14,8 +14,17 @@ class SettingController extends BaseApiController
     private const DEFAULT_SETTINGS = [
         'platform_name'        => ['value' => 'Dream More AppWorks', 'type' => 'string'],
         'platform_description' => ['value' => 'The Ethiopian freelance marketplace', 'type' => 'string'],
-        'support_email'        => ['value' => 'support@dreammore.com', 'type' => 'string'],
         'default_currency'     => ['value' => 'ETB', 'type' => 'string'],
+
+        // Contact page (footer Contact button → /contact)
+        'contact_email'    => ['value' => 'support@appworks.et', 'type' => 'string'],
+        'contact_phone'    => ['value' => '+251 911 234 567', 'type' => 'string'],
+        'contact_location' => ['value' => 'Addis Ababa, Ethiopia', 'type' => 'string'],
+        'contact_hours'    => ['value' => 'Mon–Fri, 9:00 AM – 6:00 PM (EAT)', 'type' => 'string'],
+        // Extra contact entries added by admins: [{ type, label, value }]
+        'contact_extras'   => ['value' => '[]', 'type' => 'json'],
+        // Social media links shown in the footer: [{ platform, url }]
+        'social_links'     => ['value' => '[{"platform":"github","url":""},{"platform":"telegram","url":""},{"platform":"facebook","url":""},{"platform":"instagram","url":""}]', 'type' => 'json'],
         'min_proposal_amount'  => ['value' => '', 'type' => 'string'],
         'max_proposal_amount'  => ['value' => '', 'type' => 'string'],
         'registration_open'    => ['value' => 'true', 'type' => 'boolean'],
@@ -44,7 +53,12 @@ class SettingController extends BaseApiController
             'general'  => [
                 'platform_name'        => $raw['platform_name'],
                 'platform_description' => $raw['platform_description'],
-                'support_email'        => $raw['support_email'],
+                'contact_email'        => $raw['contact_email'],
+                'contact_phone'        => $raw['contact_phone'],
+                'contact_location'     => $raw['contact_location'],
+                'contact_hours'        => $raw['contact_hours'],
+                'contact_extras'       => $raw['contact_extras'] ?? [],
+                'social_links'         => $raw['social_links'] ?? [],
             ],
             'payments' => [
                 'default_currency'    => $raw['default_currency'],

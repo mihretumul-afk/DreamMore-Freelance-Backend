@@ -58,6 +58,13 @@ interface PaymentProviderInterface
     public function payout(float $amount, string $currency, string $reference, array $recipient = []): array;
 
     /**
+     * List banks supported for payouts (used to populate withdrawal forms).
+     *
+     * @return array<int, array{code: string, name: string}>
+     */
+    public function listBanks(): array;
+
+    /**
      * Get provider name.
      */
     public function getName(): string;

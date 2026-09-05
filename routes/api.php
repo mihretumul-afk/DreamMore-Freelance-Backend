@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\Api\V1\Auth\AuthController;
+use App\Http\Controllers\Api\V1\Auth\PasswordResetController;
+use App\Http\Controllers\Auth\GoogleAuthController;
 use App\Http\Controllers\Api\V1\CategoryController;
 use App\Http\Controllers\Api\V1\SearchController;
 use App\Http\Controllers\Api\V1\EmployerProfileController;
@@ -13,6 +15,8 @@ use App\Http\Controllers\Api\V1\SkillController;
 use App\Http\Controllers\Api\V1\PlatformSettingsController;
 use App\Http\Controllers\Api\V1\VerificationSubmissionController;
 use App\Http\Controllers\Api\V1\BudgetController;
+use App\Http\Controllers\Api\V1\ContactMessageController;
+use App\Http\Controllers\Api\V1\Admin\ContactMessageController as AdminContactMessageController;
 
 /*
 |--------------------------------------------------------------------------
@@ -26,6 +30,9 @@ Route::get('/status', [HealthController::class, 'status']);
 
 // Public platform settings (no auth required)
 Route::get('/platform-settings', [PlatformSettingsController::class, 'index']);
+
+// Public Contact form (footer Contact button → /contact). Rate-limited.
+Route::post('/contact-messages', [ContactMessageController::class, 'store'])->middleware('throttle:5,1');
 
 // Global Marketplace Search (public, maintenance-aware)
 Route::middleware('maintenance')->group(function () {
@@ -50,13 +57,20 @@ Route::middleware('maintenance')->group(function () {
 Route::prefix('auth')->group(function () {
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/forgot-password', [PasswordResetController::class, 'forgotPassword'])->middleware('throttle:6,1');
+    Route::post('/reset-password', [PasswordResetController::class, 'resetPassword']);
 
     // Authenticated Auth Routes
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/me', [AuthController::class, 'me']);
         Route::post('/logout', [AuthController::class, 'logout']);
+        Route::post('/google/complete-role', [GoogleAuthController::class, 'completeRole']);
     });
 });
+
+// Root API aliases for forgot/reset password
+Route::post('/forgot-password', [PasswordResetController::class, 'forgotPassword'])->middleware('throttle:6,1');
+Route::post('/reset-password', [PasswordResetController::class, 'resetPassword']);
 
 // Authenticated Freelancer & Employer Profile Endpoints
 Route::middleware('auth:sanctum')->group(function () {
@@ -236,11 +250,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/withdrawals', [WithdrawalController::class, 'index']);
     Route::post('/withdrawals', [WithdrawalController::class, 'store']);
     Route::post('/withdrawals/{withdrawal}/cancel', [WithdrawalController::class, 'cancel']);
+    Route::delete('/withdrawals/{withdrawal}', [WithdrawalController::class, 'destroy']);
 });
 
 // ── Transactions (Financial Ledger) ─────────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/transactions', [TransactionController::class, 'index']);
+    Route::delete('/transactions/{id}', [TransactionController::class, 'destroy']);
 });
 
 // ── Add Funds (Wallet Deposit) ──────────────────────────────────────
@@ -316,6 +332,12 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     Route::delete('/reports/{report}', [ReportController::class, 'dismiss'])->middleware('permission:disputes.resolve');
     Route::delete('/reports/{report}/delete', [ReportController::class, 'destroy'])->middleware('permission:disputes.resolve');
 
+    // Contact messages (footer Contact form → admin inbox)
+    Route::get('/contacts', [AdminContactMessageController::class, 'index'])->middleware('permission:contacts.manage');
+    Route::get('/contacts/{contactMessage}', [AdminContactMessageController::class, 'show'])->middleware('permission:contacts.manage');
+    Route::patch('/contacts/{contactMessage}', [AdminContactMessageController::class, 'updateStatus'])->middleware('permission:contacts.manage');
+    Route::delete('/contacts/{contactMessage}', [AdminContactMessageController::class, 'destroy'])->middleware('permission:contacts.manage');
+
     // Category management
     Route::get('/categories', [AdminCategoryController::class, 'index'])->middleware('permission:jobs.view');
     Route::post('/categories', [AdminCategoryController::class, 'store'])->middleware('permission:jobs.edit');
@@ -367,11 +389,17 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     Route::get('/finance/payments', [FinanceController::class, 'payments'])->middleware('permission:payments.view');
     Route::get('/finance/withdrawals', [FinanceController::class, 'withdrawals'])->middleware('permission:withdrawals.view');
     Route::post('/finance/withdrawals/{withdrawal}/approve', [FinanceController::class, 'approveWithdrawal'])->middleware('permission:withdrawals.manage');
+    Route::delete('/finance/withdrawals/{withdrawal}', [FinanceController::class, 'deleteWithdrawal'])->middleware('permission:withdrawals.manage');
+    Route::delete('/finance/payments/{payment}', [FinanceController::class, 'deletePayment'])->middleware('permission:finance.manage');
     
     // Platform Revenue Management
     Route::get('/finance/platform-revenue', [FinanceController::class, 'getPlatformRevenue'])->middleware('permission:finance.view');
+    Route::get('/finance/banks', [FinanceController::class, 'banks'])->middleware('permission:finance.view');
     Route::post('/finance/withdraw-revenue', [FinanceController::class, 'withdrawPlatformRevenue'])->middleware('permission:finance.manage');
     Route::post('/finance/add-funds', [FinanceController::class, 'addPlatformFunds'])->middleware('permission:finance.manage');
+    // Reconcile platform deposits after returning from Chapa checkout (mirrors user Add Funds)
+    Route::post('/finance/add-funds/reconcile/{reference}', [FinanceController::class, 'reconcileDeposit'])->middleware('permission:finance.manage');
+    Route::post('/finance/add-funds/reconcile-all', [FinanceController::class, 'reconcileAllDeposits'])->middleware('permission:finance.manage');
 
     // Audit logs
     Route::get('/audit-logs', [AdminUserController::class, 'auditLogs'])->middleware('permission:audit_logs.view');

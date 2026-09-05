@@ -61,6 +61,7 @@ class ContractController extends BaseApiController
             'employer',
             'freelancer',
             'milestones.creator',
+            'milestones.attachments',
             'milestones.submissions' => function ($q) {
                 $q->latest();
             },

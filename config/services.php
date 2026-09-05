@@ -35,4 +35,15 @@ return [
         ],
     ],
 
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'redirect' => env('GOOGLE_REDIRECT_URI', 'http://localhost:8000/auth/google/callback'),
+        'guzzle' => [
+            'verify' => env('APP_ENV') === 'local'
+                ? (file_exists(storage_path('cacert.pem')) ? storage_path('cacert.pem') : false)
+                : true,
+        ],
+    ],
+
 ];

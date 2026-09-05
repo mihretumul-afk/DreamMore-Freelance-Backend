@@ -432,6 +432,52 @@ class ChapaProvider implements PaymentProviderInterface
     }
 
     /**
+     * List banks supported for payouts.
+     *
+     * Chapa requires the numeric bank id from this list as the transfer
+     * bank_code — arbitrary bank names/codes are rejected with HTTP 400.
+     *
+     * @see https://developer.chapa.co/transfer/list-banks
+     * @return array<int, array{code: string, name: string}>
+     */
+    public function listBanks(): array
+    {
+        try {
+            $response = $this->httpClient()->get($this->baseUrl . '/v1/banks');
+
+            if ($response->failed()) {
+                Log::error('[Chapa] List banks failed', [
+                    'status_code' => $response->status(),
+                    'error'       => $this->extractError($response),
+                ]);
+                return [];
+            }
+
+            $banks = [];
+            foreach (($response->json()['data'] ?? []) as $bank) {
+                // Only banks able to receive payouts are useful in the form.
+                if ((int) ($bank['can_process_payouts'] ?? 0) !== 1) {
+                    continue;
+                }
+                $banks[] = [
+                    'code' => (string) ($bank['id'] ?? ''),
+                    'name' => (string) ($bank['name'] ?? ''),
+                ];
+            }
+
+            // Sort alphabetically by bank name for the dropdown.
+            usort($banks, fn($a, $b) => strcmp($a['name'], $b['name']));
+
+            return $banks;
+        } catch (\Exception $e) {
+            Log::error('[Chapa] List banks exception', [
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
+    }
+
+    /**
      * Get provider name.
      */
     public function getName(): string
@@ -441,11 +487,29 @@ class ChapaProvider implements PaymentProviderInterface
 
     /**
      * Extract error message from a failed HTTP response.
+     *
+     * Chapa often returns validation errors nested per-field, e.g.
+     * {"message":{"bank_code":["Invalid bank code selected."]}}. Flatten
+     * those so the real reason is surfaced instead of a generic HTTP code.
      */
     private function extractError($response): string
     {
         $body = $response->json();
 
+        if (isset($body['message']) && is_array($body['message'])) {
+            $parts = [];
+            foreach ($body['message'] as $field => $messages) {
+                $messages = is_array($messages) ? $messages : [$messages];
+                foreach ($messages as $message) {
+                    if (is_string($message) && $message !== '') {
+                        $parts[] = $field . ': ' . $message;
+                    }
+                }
+            }
+            if (!empty($parts)) {
+                return implode('; ', $parts);
+            }
+        }
         if (isset($body['message']) && is_string($body['message'])) {
             return $body['message'];
         }

@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Auth\GoogleAuthController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -27,6 +28,16 @@ Route::get('/payment/failed', function () {
         'instruction' => 'No charges were made. You may close this page.',
     ]);
 })->name('payment.failed');
+
+/*
+|--------------------------------------------------------------------------
+| Google OAuth Routes
+|--------------------------------------------------------------------------
+| Redirect to Google's consent screen, then handle the callback by issuing a
+| Sanctum token and bouncing back to the SPA with ?token=…&new=0|1.
+*/
+Route::get('/auth/google/redirect', [GoogleAuthController::class, 'redirect'])->name('auth.google.redirect');
+Route::get('/auth/google/callback', [GoogleAuthController::class, 'callback'])->name('auth.google.callback');
 
 // Catch-all for SPA routes — return the frontend's index.html
 // so React Router can handle the route client-side.

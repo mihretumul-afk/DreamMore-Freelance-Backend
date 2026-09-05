@@ -221,9 +221,14 @@ class SecurityTest extends TestCase
                 ->assertForbidden();
         }
 
-        // System roles also protected — even Super Admin cannot delete them.
+        // Super Admin can delete non-super-admin system roles…
         $this->actingAs($this->superAdmin, 'sanctum')
             ->deleteJson("/api/v1/admin/roles/{$this->supportAdminRole->id}")
+            ->assertOk();
+
+        // …but the Super Admin role itself is permanently protected.
+        $this->actingAs($this->superAdmin, 'sanctum')
+            ->deleteJson("/api/v1/admin/roles/{$this->superAdminRole->id}")
             ->assertStatus(422);
     }
 

@@ -112,9 +112,8 @@ class AdminSettingsTest extends TestCase
                      'success' => true,
                      'message' => 'Settings retrieved successfully.',
                  ])
-                 ->assertJsonStructure([
-                     'data' => [
-                         'general' => ['platform_name', 'platform_description', 'support_email'],
+                 ->assertJsonStructure([                         'data' => [
+                         'general' => ['platform_name', 'platform_description', 'contact_email'],
                          'payments' => ['default_currency', 'min_proposal_amount', 'max_proposal_amount'],
                          'access' => ['registration_open', 'maintenance_mode'],
                      ],
@@ -173,7 +172,7 @@ class AdminSettingsTest extends TestCase
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->adminToken)
                          ->putJson('/api/v1/admin/settings', [
                              'platform_name'        => 'New Name',
-                             'support_email'        => 'new@example.com',
+                             'contact_email'        => 'new@example.com',
                              'default_currency'     => 'USD',
                              'registration_open'    => 'false',
                              'maintenance_mode'     => 'true',
@@ -183,13 +182,13 @@ class AdminSettingsTest extends TestCase
 
         $data = $response->json('data');
         $this->assertEquals('New Name', $data['general']['platform_name']);
-        $this->assertEquals('new@example.com', $data['general']['support_email']);
+        $this->assertEquals('new@example.com', $data['general']['contact_email']);
         $this->assertEquals('USD', $data['payments']['default_currency']);
         $this->assertFalse($data['access']['registration_open']);
         $this->assertTrue($data['access']['maintenance_mode']);
 
         $this->assertDatabaseHas('admin_settings', ['key' => 'platform_name', 'value' => 'New Name']);
-        $this->assertDatabaseHas('admin_settings', ['key' => 'support_email', 'value' => 'new@example.com']);
+        $this->assertDatabaseHas('admin_settings', ['key' => 'contact_email', 'value' => 'new@example.com']);
         $this->assertDatabaseHas('admin_settings', ['key' => 'default_currency', 'value' => 'USD']);
     }
 
@@ -199,7 +198,7 @@ class AdminSettingsTest extends TestCase
                          ->putJson('/api/v1/admin/settings', [
                              'platform_name'        => 'Full Update',
                              'platform_description' => 'A new description.',
-                             'support_email'        => 'updated@dm.com',
+                             'contact_email'        => 'updated@dm.com',
                              'default_currency'     => 'USD',
                              'min_proposal_amount'  => '100',
                              'max_proposal_amount'  => '50000',
@@ -212,12 +211,104 @@ class AdminSettingsTest extends TestCase
         $data = $response->json('data');
         $this->assertEquals('Full Update', $data['general']['platform_name']);
         $this->assertEquals('A new description.', $data['general']['platform_description']);
-        $this->assertEquals('updated@dm.com', $data['general']['support_email']);
+        $this->assertEquals('updated@dm.com', $data['general']['contact_email']);
         $this->assertEquals('USD', $data['payments']['default_currency']);
         $this->assertEquals('100', $data['payments']['min_proposal_amount']);
         $this->assertEquals('50000', $data['payments']['max_proposal_amount']);
         $this->assertFalse($data['access']['registration_open']);
         $this->assertTrue($data['access']['maintenance_mode']);
+    }
+
+    public function test_admin_can_store_additional_contact_entries(): void
+    {
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->adminToken)
+                         ->putJson('/api/v1/admin/settings', [
+                             'contact_extras' => [
+                                 ['type' => 'social', 'label' => 'Telegram', 'value' => '@dreammore'],
+                                 ['type' => 'email', 'label' => '', 'value' => 'jobs@dreammore.et'],
+                             ],
+                         ]);
+
+        $response->assertStatus(200);
+
+        $data = $response->json('data');
+        $this->assertCount(2, $data['general']['contact_extras']);
+        $this->assertEquals('social', $data['general']['contact_extras'][0]['type']);
+        $this->assertEquals('Telegram', $data['general']['contact_extras'][0]['label']);
+
+        // Stored with a json type so the decoded array survives a re-read
+        $this->assertDatabaseHas('admin_settings', [
+            'key'  => 'contact_extras',
+            'type' => 'json',
+        ]);
+    }
+
+    public function test_update_rejects_invalid_extra_contact_type(): void
+    {
+        $this->withHeader('Authorization', 'Bearer ' . $this->adminToken)
+             ->putJson('/api/v1/admin/settings', [
+                 'contact_extras' => [
+                     ['type' => 'fax', 'label' => '', 'value' => '12345'],
+                 ],
+             ])
+             ->assertStatus(422)
+             ->assertJsonValidationErrors(['contact_extras.0.type']);
+    }
+
+    // ─── SOCIAL MEDIA LINKS ────────────────────────────────────────────
+
+    public function test_admin_can_store_social_links(): void
+    {
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->adminToken)
+                         ->putJson('/api/v1/admin/settings', [
+                             'social_links' => [
+                                 ['platform' => 'github', 'url' => 'github.com/dreammore'],
+                                 ['platform' => 'telegram', 'url' => 't.me/dreammore'],
+                             ],
+                         ]);
+
+        $response->assertStatus(200);
+
+        $data = $response->json('data');
+        $this->assertCount(2, $data['general']['social_links']);
+        $this->assertEquals('github', $data['general']['social_links'][0]['platform']);
+        $this->assertEquals('github.com/dreammore', $data['general']['social_links'][0]['url']);
+
+        // Stored with a json type so the decoded array survives a re-read
+        $this->assertDatabaseHas('admin_settings', [
+            'key'  => 'social_links',
+            'type' => 'json',
+        ]);
+    }
+
+    public function test_update_rejects_invalid_social_platform(): void
+    {
+        $this->withHeader('Authorization', 'Bearer ' . $this->adminToken)
+             ->putJson('/api/v1/admin/settings', [
+                 'social_links' => [
+                     ['platform' => 'myspace', 'url' => 'myspace.com/dreammore'],
+                 ],
+             ])
+             ->assertStatus(422)
+             ->assertJsonValidationErrors(['social_links.0.platform']);
+    }
+
+    public function test_admin_can_store_social_link_with_empty_url(): void
+    {
+        // Empty URLs are allowed — the footer hides links without a URL.
+        $this->withHeader('Authorization', 'Bearer ' . $this->adminToken)
+             ->putJson('/api/v1/admin/settings', [
+                 'social_links' => [
+                     ['platform' => 'github', 'url' => ''],
+                 ],
+             ])
+             ->assertStatus(200);
+
+        $data = $this->withHeader('Authorization', 'Bearer ' . $this->adminToken)
+                      ->getJson('/api/v1/admin/settings')
+                      ->json('data');
+        $this->assertCount(1, $data['general']['social_links']);
+        $this->assertEquals('', $data['general']['social_links'][0]['url']);
     }
 
     // ─── VALIDATION ────────────────────────────────────────────────────
@@ -226,10 +317,10 @@ class AdminSettingsTest extends TestCase
     {
         $this->withHeader('Authorization', 'Bearer ' . $this->adminToken)
              ->putJson('/api/v1/admin/settings', [
-                 'support_email' => 'not-an-email',
+                 'contact_email' => 'not-an-email',
              ])
              ->assertStatus(422)
-             ->assertJsonValidationErrors(['support_email']);
+             ->assertJsonValidationErrors(['contact_email']);
     }
 
     public function test_update_rejects_invalid_registration_open_value(): void
@@ -280,7 +371,7 @@ class AdminSettingsTest extends TestCase
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->adminToken)
                          ->putJson('/api/v1/admin/settings', [
                              'platform_name' => null,
-                             'support_email' => 'only-this@test.com',
+                             'contact_email' => 'only-this@test.com',
                          ]);
 
         $response->assertStatus(200);
@@ -290,9 +381,9 @@ class AdminSettingsTest extends TestCase
             'key'   => 'platform_name',
             'value' => 'Keep Me',
         ]);
-        // support_email should be updated
+        // contact_email should be updated
         $this->assertDatabaseHas('admin_settings', [
-            'key'   => 'support_email',
+            'key'   => 'contact_email',
             'value' => 'only-this@test.com',
         ]);
     }
@@ -400,7 +491,7 @@ class AdminSettingsTest extends TestCase
         // Send invalid data that should fail validation (not a DB error, but validates the flow)
         $this->withHeader('Authorization', 'Bearer ' . $this->adminToken)
              ->putJson('/api/v1/admin/settings', [
-                 'support_email' => 'invalid-email',
+                 'contact_email' => 'invalid-email',
              ])
              ->assertStatus(422);
 

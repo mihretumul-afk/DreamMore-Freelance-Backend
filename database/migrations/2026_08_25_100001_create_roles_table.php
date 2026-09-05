@@ -10,7 +10,8 @@ return new class extends Migration
      * Admin roles table.
      *
      * Stores both the four built-in system roles and any custom roles
-     * created by a Super Admin. System roles are protected from deletion.
+     * created by a Super Admin. The Super Admin role is protected from
+     * deletion; other built-in roles can be deleted by a Super Admin.
      */
     public function up(): void
     {
@@ -26,7 +27,7 @@ return new class extends Migration
             // Optional description of what this role can do.
             $table->string('description', 500)->nullable();
 
-            // Prevents system roles from being deleted or renamed.
+            // Marks built-in roles (Super Admin is never deletable).
             $table->boolean('is_system')->default(false);
 
             // Soft-delete style active flag (deactivating does not lose data).

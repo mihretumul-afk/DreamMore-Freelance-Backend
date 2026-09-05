@@ -125,6 +125,13 @@ class AddFundsController extends BaseApiController
             $service = app(AddFundsService::class);
             $result = $service->handleWebhook($provider, $payload, $signature);
 
+            // The transaction reference doesn't belong to a user wallet deposit —
+            // it may be an admin platform deposit (admin Add Funds via Chapa).
+            if (!$result['success'] && ($result['error'] ?? '') === 'Payment not found') {
+                $platformService = app(\App\Services\Payment\PlatformFinanceService::class);
+                $result = $platformService->handleWebhook($provider, $payload, $signature);
+            }
+
             if ($result['success']) {
                 return response()->json(['received' => true]);
             }

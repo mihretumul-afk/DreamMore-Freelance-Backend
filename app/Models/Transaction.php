@@ -5,10 +5,11 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Transaction extends Model
 {
-    use HasFactory;
+    use HasFactory, SoftDeletes;
 
     // ── Type constants ────────────────────────────────────────────────────
     public const TYPE_PAYMENT              = 'payment';
@@ -70,6 +71,15 @@ class Transaction extends Model
     public function payment(): BelongsTo
     {
         return $this->belongsTo(Payment::class);
+    }
+
+    /**
+     * Whether this transaction entry may be removed from a user's history.
+     * In-flight (pending) entries are protected to avoid breaking deposits/reconciliation.
+     */
+    public function isDeletable(): bool
+    {
+        return $this->status !== self::STATUS_PENDING;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

@@ -128,6 +128,15 @@ class RbacTest extends TestCase
             ->assertJsonStructure(['data' => ['all', 'grouped']]);
     }
 
+    public function test_permissions_endpoint_includes_contacts_manage(): void
+    {
+        $this->actingAs($this->superAdmin, 'sanctum')
+            ->getJson('/api/v1/admin/permissions')
+            ->assertOk()
+            ->assertJsonPath('data.grouped.contacts.0.slug', 'contacts.manage')
+            ->assertJsonPath('data.grouped.contacts.0.name', 'Manage Contact Messages');
+    }
+
     public function test_super_admin_can_create_custom_role(): void
     {
         $this->actingAs($this->superAdmin, 'sanctum')
@@ -451,11 +460,20 @@ class RbacTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_super_admin_cannot_delete_system_role(): void
+    public function test_super_admin_can_delete_non_super_admin_system_role(): void
     {
         $this->actingAs($this->superAdmin, 'sanctum')
             ->deleteJson("/api/v1/admin/roles/{$this->disputeAdminRole->id}")
-            ->assertStatus(422); // is_system protection
+            ->assertOk();
+
+        $this->assertDatabaseMissing('roles', ['id' => $this->disputeAdminRole->id]);
+    }
+
+    public function test_super_admin_cannot_delete_super_admin_role(): void
+    {
+        $this->actingAs($this->superAdmin, 'sanctum')
+            ->deleteJson("/api/v1/admin/roles/{$this->superAdminRole->id}")
+            ->assertStatus(422); // Super Admin role protection
     }
 
     public function test_super_admin_cannot_modify_super_admin_role_permissions(): void
@@ -474,6 +492,18 @@ class RbacTest extends TestCase
                 'name' => 'Renamed System Role',
             ])
             ->assertStatus(422);
+    }
+
+    public function test_super_admin_can_update_system_role_without_changing_name(): void
+    {
+        $this->actingAs($this->superAdmin, 'sanctum')
+            ->putJson("/api/v1/admin/roles/{$this->supportAdminRole->id}", [
+                'name'        => $this->supportAdminRole->name,
+                'description' => 'Updated system role description',
+            ])
+            ->assertOk();
+
+        $this->assertEquals('Updated system role description', $this->supportAdminRole->fresh()->description);
     }
 
     // ── 8. Audit log is written for key RBAC actions ─────────────────────
@@ -686,7 +716,8 @@ class RbacTest extends TestCase
 
         $this->actingAs($this->superAdmin, 'sanctum')
             ->putJson("/api/v1/admin/reports/{$report->id}/resolve", [
-                'resolution' => 'Removed offending job.',
+                'resolution'      => 'Removed offending job.',
+                'resolution_type' => 'refund_to_employer',
             ])
             ->assertOk();
 
@@ -832,8 +863,18 @@ class RbacTest extends TestCase
     {
         $this->assertTrue($this->supportAdmin->hasPermission('users.view'));
         $this->assertTrue($this->supportAdmin->hasPermission('disputes.resolve'));
+        $this->assertTrue($this->supportAdmin->hasPermission('contacts.manage'));
         $this->assertFalse($this->supportAdmin->hasPermission('admins.create'));
         $this->assertFalse($this->supportAdmin->hasPermission('roles.create'));
+    }
+
+    public function test_contacts_manage_is_restricted_to_granted_roles(): void
+    {
+        // Granting comes from the role definition — Support Admin has it by
+        // default, while Dispute Admin and non-admins must not.
+        $this->assertTrue($this->supportAdmin->hasPermission('contacts.manage'));
+        $this->assertFalse($this->disputeAdmin->hasPermission('contacts.manage'));
+        $this->assertFalse($this->freelancer->hasPermission('contacts.manage'));
     }
 
     public function test_dispute_admin_has_expected_permissions(): void

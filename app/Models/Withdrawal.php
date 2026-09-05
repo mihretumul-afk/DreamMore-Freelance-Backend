@@ -5,10 +5,11 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Withdrawal extends Model
 {
-    use HasFactory;
+    use HasFactory, SoftDeletes;
 
     // ── Status constants ──────────────────────────────────────────────────
     public const STATUS_REQUESTED  = 'requested';
@@ -63,6 +64,21 @@ class Withdrawal extends Model
     public function paymentMethod(): BelongsTo
     {
         return $this->belongsTo(PaymentMethod::class);
+    }
+
+    /**
+     * Whether this withdrawal record may be removed from history.
+     * Active (requested/processing) withdrawals are protected because funds
+     * are still reserved/moving and must be cancelled or completed first.
+     */
+    public function isDeletable(): bool
+    {
+        return in_array($this->status, [
+            self::STATUS_COMPLETED,
+            self::STATUS_FAILED,
+            self::STATUS_CANCELLED,
+            self::STATUS_REJECTED,
+        ]);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

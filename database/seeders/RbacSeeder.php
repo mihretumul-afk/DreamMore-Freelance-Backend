@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Hash;
 class RbacSeeder extends Seeder
 {
     /**
-     * All 35 platform permissions, grouped by domain.
+     * All 36 platform permissions, grouped by domain.
      * [slug => [name, group, description]]
      */
     private array $permissions = [
@@ -49,6 +49,9 @@ class RbacSeeder extends Seeder
         'disputes.resolve'  => ['Resolve Disputes',  'disputes', 'Mark disputes as resolved'],
         'disputes.escalate' => ['Escalate Disputes', 'disputes', 'Escalate disputes to Super Admin'],
 
+        // ── Contacts (footer Contact button) ─────────────────────────────
+        'contacts.manage' => ['Manage Contact Messages', 'contacts', 'View and respond to messages sent through the Contact page (footer Contact button)'],
+
         // ── Administrators ────────────────────────────────────────────────
         'admins.view'        => ['View Admins',        'admins', 'List and view admin user accounts'],
         'admins.create'      => ['Create Admins',      'admins', 'Create new admin user accounts'],
@@ -61,7 +64,7 @@ class RbacSeeder extends Seeder
         'roles.view'   => ['View Roles',   'roles', 'List and inspect admin roles'],
         'roles.create' => ['Create Roles', 'roles', 'Create new custom admin roles'],
         'roles.edit'   => ['Edit Roles',   'roles', 'Rename or update custom roles'],
-        'roles.delete' => ['Delete Roles', 'roles', 'Delete custom (non-system) roles'],
+        'roles.delete' => ['Delete Roles', 'roles', 'Delete roles (the Super Admin role is protected)'],
         'roles.assign' => ['Assign Roles', 'roles', 'Assign permissions to roles'],
 
         // ── Audit ─────────────────────────────────────────────────────────
@@ -104,6 +107,7 @@ class RbacSeeder extends Seeder
                 'disputes.view',
                 'disputes.review',
                 'disputes.resolve',
+                'contacts.manage',
                 'audit_logs.view',
                 'settings.view',
                 'admin_account.view',

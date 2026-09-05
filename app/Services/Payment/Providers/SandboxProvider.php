@@ -78,6 +78,13 @@ class SandboxProvider implements PaymentProviderInterface
         ];
     }
 
+    public function listBanks(): array
+    {
+        // No real bank list in sandbox — the frontend falls back to free-text
+        // bank details since payouts are simulated.
+        return [];
+    }
+
     public function getName(): string
     {
         return 'sandbox';
