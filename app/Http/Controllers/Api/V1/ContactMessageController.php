@@ -36,6 +36,14 @@ class ContactMessageController extends BaseApiController
             'message' => $validated['message'],
         ]);
 
+        \App\Services\NotificationService::notifyAdmins(
+            'contacts.manage',
+            'contact_message_received',
+            'New Contact Message Received',
+            "Inquiry from {$validated['name']} ({$validated['email']}): {$validated['subject']}",
+            '/admin/contacts'
+        );
+
         return $this->sendResponse(
             $message,
             'Message sent successfully. We will get back to you within 24 hours.',

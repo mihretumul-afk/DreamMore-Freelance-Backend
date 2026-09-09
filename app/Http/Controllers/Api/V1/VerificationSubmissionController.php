@@ -41,6 +41,14 @@ class VerificationSubmissionController extends BaseApiController
             'status' => 'pending',
         ]);
 
+        NotificationService::notifyAdmins(
+            'users.verify',
+            'admin_verification_submitted',
+            'New Identity Verification Submitted',
+            "{$user->name} submitted identity verification document ({$verification->type}) for review.",
+            '/admin/verifications?type=identity&status=pending'
+        );
+
         return $this->sendResponse($verification, 'Verification documents submitted successfully.', 201);
     }
 

@@ -114,7 +114,7 @@ class AdminSettingsTest extends TestCase
                  ])
                  ->assertJsonStructure([                         'data' => [
                          'general' => ['platform_name', 'platform_description', 'contact_email'],
-                         'payments' => ['default_currency', 'min_proposal_amount', 'max_proposal_amount'],
+                         'payments' => ['default_currency', 'platform_fee_percent'],
                          'access' => ['registration_open', 'maintenance_mode'],
                      ],
                  ]);
@@ -200,8 +200,7 @@ class AdminSettingsTest extends TestCase
                              'platform_description' => 'A new description.',
                              'contact_email'        => 'updated@dm.com',
                              'default_currency'     => 'USD',
-                             'min_proposal_amount'  => '100',
-                             'max_proposal_amount'  => '50000',
+                             'platform_fee_percent' => '10',
                              'registration_open'    => 'false',
                              'maintenance_mode'     => 'true',
                          ]);
@@ -213,8 +212,7 @@ class AdminSettingsTest extends TestCase
         $this->assertEquals('A new description.', $data['general']['platform_description']);
         $this->assertEquals('updated@dm.com', $data['general']['contact_email']);
         $this->assertEquals('USD', $data['payments']['default_currency']);
-        $this->assertEquals('100', $data['payments']['min_proposal_amount']);
-        $this->assertEquals('50000', $data['payments']['max_proposal_amount']);
+        $this->assertEquals('10', $data['payments']['platform_fee_percent']);
         $this->assertFalse($data['access']['registration_open']);
         $this->assertTrue($data['access']['maintenance_mode']);
     }

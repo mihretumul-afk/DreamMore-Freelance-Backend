@@ -27,7 +27,7 @@ class VerificationController extends BaseApiController
 
         if ($type === 'identity' || $type === 'credential') {
             if ($type === 'identity') {
-                $query     = Verification::with('user')
+                $query     = Verification::with(['user.freelancerProfile', 'user.verifications', 'user.credentials'])
                     ->when($status, fn ($q) => $q->where('status', $status))
                     ->orderByDesc('created_at');
                 $paginator = $query->paginate($perPage);
@@ -36,10 +36,9 @@ class VerificationController extends BaseApiController
                     return $v;
                 });
             } else {
-                $query = Credential::with(['user', 'reviewer'])
+                $query = Credential::with(['user.freelancerProfile', 'user.verifications', 'user.credentials', 'reviewer', 'skillTestAttempts.skillTest'])
                     ->when($status, fn ($q) => $q->where('status', $status))
-                    ->orderByDesc('created_at')
-                    ->with('skillTestAttempts.skillTest');
+                    ->orderByDesc('created_at');
                 $paginator = $query->paginate($perPage);
                 $items     = $paginator->getCollection()->map(function ($c) {
                     $c->item_type = 'credential';
@@ -61,14 +60,14 @@ class VerificationController extends BaseApiController
         }
 
         // 'all' — merge both types.
-        $verifications = Verification::with('user')
+        $verifications = Verification::with(['user.freelancerProfile', 'user.verifications', 'user.credentials'])
             ->when($status, fn ($q) => $q->where('status', $status))
             ->orderByDesc('created_at')
             ->limit($perPage)
             ->get()
             ->map(fn ($v) => (clone $v)->setAttribute('item_type', 'identity'));
 
-        $credentials = Credential::with(['user', 'reviewer', 'skillTestAttempts.skillTest'])
+        $credentials = Credential::with(['user.freelancerProfile', 'user.verifications', 'user.credentials', 'reviewer', 'skillTestAttempts.skillTest'])
             ->when($status, fn ($q) => $q->where('status', $status))
             ->orderByDesc('created_at')
             ->limit($perPage)

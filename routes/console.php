@@ -8,7 +8,8 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-Schedule::command('milestones:auto-approve')->daily();
+// Automatically release escrow for submitted milestones unreviewed after configured auto_release_days
+Schedule::command('milestones:auto-release')->daily();
 
 // Expire featured job and profile listings past their expires_at
 Schedule::command('featured:listings:expire')->daily();

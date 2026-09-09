@@ -130,6 +130,7 @@ class ProposalController extends BaseApiController
 
         // Notify admins about the new proposal
         NotificationService::notifyAdmins(
+            'jobs.view',
             'admin_proposal_created',
             'New Proposal Submitted',
             "{$request->user()->name} submitted a proposal for '{$job->title}'.",

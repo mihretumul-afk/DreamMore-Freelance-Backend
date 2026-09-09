@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Events\NotificationCreated;
 use App\Models\Notification;
+use App\Models\Role;
 use App\Models\User;
 
 class NotificationService
@@ -429,11 +430,34 @@ class NotificationService
     }
 
     /**
-     * Notify all administrators of an administrative event.
+     * Notify administrators of an administrative event, routed by role.
+     *
+     * Only active admins whose active role grants at least one of the given permissions
+     * receive the notification. Super Admins always receive it.
+     *
+     * Common routing examples:
+     *   - 'users.verify'    → support admins (credential/verification review)
+     *   - ['finance.view', 'withdrawals.view'] → finance admins (withdrawals, payments)
+     *   - 'disputes.review' → dispute admins (dispute updates)
+     *   - 'contacts.manage' → contact admins (inquiries)
      */
-    public static function notifyAdmins(string $type, string $title, string $message, ?string $link = null): void
+    public static function notifyAdmins(string|array $permissions, string $type, string $title, string $message, ?string $link = null): void
     {
-        $admins = \App\Models\User::where('role', 'admin')->get();
+        $permsList = array_values((array) $permissions);
+
+        $admins = User::where('role', 'admin')
+            ->where('status', 'active')
+            ->where(function ($query) use ($permsList) {
+                $query->whereHas('adminRoles', function ($roleQuery) use ($permsList) {
+                    $roleQuery->where('is_active', true)
+                        ->where(function ($roleInner) use ($permsList) {
+                            $roleInner->where('slug', Role::SUPER_ADMIN)
+                                ->orWhereHas('permissions', fn ($permissionQuery) => $permissionQuery->whereIn('slug', $permsList));
+                        });
+                });
+            })
+            ->get();
+
         foreach ($admins as $admin) {
             self::create($admin->id, $type, $title, $message, $link);
         }
@@ -583,6 +607,7 @@ class NotificationService
     public static function newFreelancerRegistered(int $freelancerId, string $freelancerName): void
     {
         self::notifyAdmins(
+            'users.verify',
             'new_freelancer_registration',
             'New Freelancer Registration',
             "{$freelancerName} has registered as a freelancer and is awaiting approval.",

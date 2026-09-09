@@ -40,7 +40,7 @@ class FreelancerProfileController extends BaseApiController
         $search = $request->input('search');
 
         $query = FreelancerProfile::query()
-            ->with(['user', 'skills'])
+            ->with(['user', 'skills', 'category'])
             ->approved()
             ->whereHas('user', fn ($userQuery) => $userQuery->where('status', 'active')->where('role', 'freelancer'))
             ->when($request->filled('search'), function ($query) use ($search) {
@@ -52,7 +52,16 @@ class FreelancerProfileController extends BaseApiController
                         ->orWhereHas('skills', fn ($skillQuery) => $skillQuery->where('name', 'like', "%{$search}%"));
                 });
             })
-            ->when($request->filled('category_id'), fn ($query) => $query->whereHas('skills', fn ($skillQuery) => $skillQuery->where('category_id', $request->input('category_id'))))
+            ->when($request->filled('category_id'), function ($query) use ($request) {
+                $categoryId = (int) $request->input('category_id');
+
+                // Match the profile's explicit category, or any skill in that category
+                // (keeps older profiles that only have category-tagged skills findable).
+                return $query->where(function ($q) use ($categoryId) {
+                    $q->where('category_id', $categoryId)
+                        ->orWhereHas('skills', fn ($skillQuery) => $skillQuery->where('category_id', $categoryId));
+                });
+            })
             ->when($request->filled('skill_id'), fn ($query) => $query->whereHas('skills', fn ($skillQuery) => $skillQuery->where('skills.id', $request->input('skill_id'))))
             ->when($request->filled('experience_level'), fn ($query) => $query->where('experience_level', $request->input('experience_level')))
             ->when($request->filled('availability_status'), fn ($query) => $query->where('availability_status', $request->input('availability_status')))
@@ -66,8 +75,8 @@ class FreelancerProfileController extends BaseApiController
             SELECT 1 FROM featured_profiles
             WHERE featured_profiles.user_id = freelancer_profiles.user_id
             AND featured_profiles.status = ?
-            AND featured_profiles.expires_at > UTC_TIMESTAMP()
-        ) THEN 0 ELSE 1 END)', [FeaturedProfile::STATUS_ACTIVE]);
+            AND featured_profiles.expires_at > ?
+        ) THEN 0 ELSE 1 END)', [FeaturedProfile::STATUS_ACTIVE, now()->toDateTimeString()]);
 
         // Sorting: rating desc by default; also support hourly_rate, created_at, experience, completed_jobs.
         $sort = $this->resolveSort($request);
@@ -140,7 +149,7 @@ class FreelancerProfileController extends BaseApiController
             ]
         );
 
-        $profile->load(['user', 'skills']);
+        $profile->load(['user', 'skills', 'category']);
 
         return $this->sendResponse(
             new FreelancerProfileResource($profile),
@@ -177,7 +186,7 @@ class FreelancerProfileController extends BaseApiController
             $profile->skills()->sync($syncData);
         }
 
-        $profile->load(['user', 'skills']);
+        $profile->load(['user', 'skills', 'category']);
 
         return $this->sendResponse(
             new FreelancerProfileResource($profile),
@@ -190,7 +199,7 @@ class FreelancerProfileController extends BaseApiController
      */
     public function showPublic(string $id): JsonResponse
     {
-        $profile = FreelancerProfile::with(['user', 'skills'])
+        $profile = FreelancerProfile::with(['user', 'skills', 'category'])
             ->approved()
             ->whereHas('user', fn ($userQuery) => $userQuery->where('status', 'active')->where('role', 'freelancer'))
             ->where(function ($query) use ($id) {

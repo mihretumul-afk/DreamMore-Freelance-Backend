@@ -349,15 +349,26 @@ class UserSeeder extends Seeder
                 $definition
             );
 
-            // Attach skills through the freelancer_skills pivot.
+            // Attach skills through the freelancer_skills pivot and remember the
+            // first category found so the profile itself gets a category_id
+            // (used by the public /freelancers?category_id=... filter).
             $syncData = [];
+            $profileCategoryId = $profile->category_id;
             foreach ($skills as $skillDefinition) {
                 $skill = Skill::where('name', $skillDefinition['name'])->first();
                 if ($skill) {
                     $syncData[$skill->id] = ['years_of_experience' => $skillDefinition['years']];
+
+                    if (! $profileCategoryId && $skill->category_id) {
+                        $profileCategoryId = $skill->category_id;
+                    }
                 }
             }
             $profile->skills()->sync($syncData);
+
+            if (! $profile->category_id && $profileCategoryId) {
+                $profile->update(['category_id' => $profileCategoryId]);
+            }
         }
     }
 }

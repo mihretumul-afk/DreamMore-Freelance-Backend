@@ -171,7 +171,19 @@ class AddFundsController extends BaseApiController
             $service = app(AddFundsService::class);
             $status = $service->getDepositStatus($payment, $user->id);
 
-            return $this->sendResponse($status, 'Deposit status retrieved.');
+            // Compute previous_balance for completed deposits so frontend modal can display breakdown
+            $prevBalance = max(0, (float) $status['wallet']['available_balance'] - (float) $status['payment']['amount']);
+            $status['previous_balance'] = round($prevBalance, 2);
+
+            $msg = match ($status['payment']['status']) {
+                'completed' => 'Funds added successfully.',
+                'pending'   => 'Payment is processing.',
+                'failed'    => 'Payment failed: ' . ($status['payment']['failure_reason'] ?? 'Transaction failed'),
+                'cancelled' => 'Payment was cancelled.',
+                default     => 'Deposit status retrieved.',
+            };
+
+            return $this->sendResponse($status, $msg);
         } catch (\RuntimeException $e) {
             return $this->sendError($e->getMessage(), [], 422);
         }
@@ -191,13 +203,13 @@ class AddFundsController extends BaseApiController
         $service = app(AddFundsService::class);
         $reconciled = 0;
 
-        // Only check payments older than 2 minutes (recent ones are still processing)
+        // Check recent pending deposits (created within the last 24h)
         $pendingPayments = \App\Models\Payment::where('payer_id', $user->id)
             ->where('type', \App\Models\Payment::TYPE_WALLET_DEPOSIT)
             ->where('status', \App\Models\Payment::STATUS_PENDING)
             ->whereNotNull('provider_reference')
-            ->where('created_at', '<=', now()->subMinutes(2))
-            ->limit(3)  // Max 3 at a time to prevent timeouts
+            ->where('created_at', '>=', now()->subDays(1))
+            ->limit(5)  // Max 5 at a time to prevent timeouts
             ->get();
 
         if ($pendingPayments->isEmpty()) {

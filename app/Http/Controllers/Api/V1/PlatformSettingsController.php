@@ -14,7 +14,7 @@ class PlatformSettingsController extends BaseApiController
      */
     public function index(): JsonResponse
     {
-        $platformFee = PlatformSetting::get('platform_fee_percent', '8');
+        $platformFee = AdminSetting::getValue('platform_fee_percent', PlatformSetting::get('platform_fee_percent', '8'), 'string');
         $autoApprove = PlatformSetting::get('auto_approve_days', '5');
 
         $settings = [
@@ -31,6 +31,7 @@ class PlatformSettingsController extends BaseApiController
             'maintenance_mode'     => AdminSetting::getValue('maintenance_mode', 'false', 'boolean'),
             'platform_fee_percent' => (float) $platformFee,
             'auto_approve_days'    => (int) $autoApprove,
+            'auto_release_days'    => (int) AdminSetting::getValue('auto_release_days', 14, 'integer'),
 
             // Featured Listing settings (public for frontend feature detection)
             'featured_jobs_enabled'     => AdminSetting::getValue('featured_jobs_enabled', 'false', 'boolean'),
@@ -41,7 +42,7 @@ class PlatformSettingsController extends BaseApiController
     }
 
     /**
-     * Admin updates platform fee percentage (range 0 to 50).
+     * Admin updates platform fee percentage (range 0 to 50) and auto-release timeframe.
      */
     public function updateFee(Request $request): JsonResponse
     {
@@ -51,18 +52,25 @@ class PlatformSettingsController extends BaseApiController
 
         $validated = $request->validate([
             'platform_fee_percent' => 'required|numeric|min:0|max:50',
-            'auto_approve_days' => 'nullable|integer|min:1|max:30',
+            'auto_release_days'    => 'nullable|integer|min:1|max:90',
+            'auto_approve_days'    => 'nullable|integer|min:1|max:30',
         ]);
 
-        PlatformSetting::set('platform_fee_percent', $validated['platform_fee_percent']);
+        AdminSetting::setValue('platform_fee_percent', (string) $validated['platform_fee_percent'], 'string');
+        PlatformSetting::set('platform_fee_percent', (string) $validated['platform_fee_percent']);
+
+        if (isset($validated['auto_release_days'])) {
+            AdminSetting::setValue('auto_release_days', (int) $validated['auto_release_days'], 'integer');
+        }
 
         if (isset($validated['auto_approve_days'])) {
             PlatformSetting::set('auto_approve_days', $validated['auto_approve_days']);
         }
 
         return $this->sendResponse([
-            'platform_fee_percent' => (float) PlatformSetting::get('platform_fee_percent', '8'),
-            'auto_approve_days' => (int) PlatformSetting::get('auto_approve_days', '5'),
+            'platform_fee_percent' => (float) AdminSetting::getValue('platform_fee_percent', '8', 'string'),
+            'auto_release_days'    => (int) AdminSetting::getValue('auto_release_days', 14, 'integer'),
+            'auto_approve_days'    => (int) PlatformSetting::get('auto_approve_days', '5'),
         ], 'Platform fee updated successfully.');
     }
 

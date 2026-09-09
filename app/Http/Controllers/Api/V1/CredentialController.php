@@ -86,12 +86,15 @@ class CredentialController extends BaseApiController
         $rules = [
             'title' => 'required|string|max:255',
             'type' => 'required|in:dream_more_certificate,external_certificate,training_certificate,professional_qualification,other',
-            'issuing_organization' => $isDreamMore ? 'nullable|string|max:255' : 'required|string|max:255',
+            'issuing_organization' => 'nullable|string|max:255',
+            'certificate_identifier' => $isDreamMore ? 'required|string|max:255' : 'nullable|string|max:255',
             'certificate_identifier' => $isDreamMore ? 'required|string|max:255' : 'nullable|string|max:255',
             'description' => 'nullable|string|max:2000',
             'issue_date' => 'nullable|date',
             'expiry_date' => 'nullable|date|after_or_equal:issue_date',
             'skill_id' => 'nullable|integer|exists:skills,id',
+            'verification_document' => 'nullable|file|mimes:pdf,jpg,jpeg,png,webp|max:10240',
+            'verification_notes' => 'nullable|string|max:2000',
         ];
 
         // Document required for external certificate; optional for DreamMore certificate
@@ -130,6 +133,24 @@ class CredentialController extends BaseApiController
         }
 
         $validated = $request->validate($rules);
+
+        // Handle optional combined identity verification document
+        $hasVerificationDoc = false;
+        if ($request->hasFile('verification_document')) {
+            $verifFile = $request->file('verification_document');
+            $verifFileName = $user->id . '_verif_' . time() . '_' . bin2hex(random_bytes(6)) . '.' . $verifFile->getClientOriginalExtension();
+            $verifFile->storeAs('verifications', $verifFileName, 'public');
+            $verifDocUrl = Storage::disk('public')->url('verifications/' . $verifFileName);
+
+            \App\Models\Verification::create([
+                'user_id' => $user->id,
+                'type' => 'identity',
+                'document_url' => $verifDocUrl,
+                'notes' => $request->input('verification_notes'),
+                'status' => 'pending',
+            ]);
+            $hasVerificationDoc = true;
+        }
 
         // Handle file storage
         $safeName = null;
@@ -229,20 +250,29 @@ class CredentialController extends BaseApiController
             NotificationService::skillTestRequired($user->id, $credential->title, 'Skill Assessment');
         }
 
-        // Notify all admins about new credential submission (unless auto-verified)
+        // Notify admins about new credential submission (single merged notification if identity doc attached)
         if ($status !== 'approved') {
+            $notificationTitle = $hasVerificationDoc
+                ? 'New Credential & Identity Document Submitted'
+                : 'New Credential Submitted';
+
+            $notificationMessage = $hasVerificationDoc
+                ? "{$user->name} submitted credential '{$credential->title}' and identity verification document for review."
+                : "{$user->name} submitted credential '{$credential->title}' ({$credential->type}) for review.";
+
             NotificationService::notifyAdmins(
+                'users.verify',
                 'credential_submitted',
-                'New Credential Submitted',
-                "{$user->name} submitted credential '{$credential->title}' ({$credential->type}) for review.",
-                '/admin/verifications?type=credential&status=pending'
+                $notificationTitle,
+                $notificationMessage,
+                '/admin/verifications?status=pending'
             );
 
             // Broadcast real-time event to admin dashboard
             broadcast(new CredentialSubmitted($credential, $user->name));
         }
 
-        return $this->sendResponse($credential, 'Credential submitted successfully for verification.', 201);
+        return $this->sendResponse($credential, 'Credential submitted successfully.', 201);
     }
 
     /**
@@ -336,6 +366,7 @@ class CredentialController extends BaseApiController
 
         // Notify admins about credential resubmission
         NotificationService::notifyAdmins(
+            'users.verify',
             'credential_resubmitted',
             'Credential Resubmitted',
             "{$user->name} resubmitted credential '{$credential->title}' for review after previous {$credential->status} status.",

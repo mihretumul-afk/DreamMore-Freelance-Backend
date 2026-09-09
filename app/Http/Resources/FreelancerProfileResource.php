@@ -32,6 +32,12 @@ class FreelancerProfileResource extends JsonResource
         return [
             'id' => $this->id,
             'user_id' => $this->user_id,
+            'category_id' => $this->category_id,
+            'category' => $this->whenLoaded('category', function () {
+                return $this->category
+                    ? ['id' => $this->category->id, 'name' => $this->category->name, 'slug' => $this->category->slug]
+                    : null;
+            }),
             'approval_status' => $this->approval_status ?? 'pending',
             'approved_at' => $this->approved_at?->toISOString(),
             'rejection_reason' => $this->rejection_reason,

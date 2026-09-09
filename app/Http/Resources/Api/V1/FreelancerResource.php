@@ -26,6 +26,12 @@ class FreelancerResource extends JsonResource
                     'avatar' => $this->user->avatar,
                 ];
             }),
+            'category_id' => $this->category_id,
+            'category' => $this->whenLoaded('category', function () {
+                return $this->category
+                    ? ['id' => $this->category->id, 'name' => $this->category->name, 'slug' => $this->category->slug]
+                    : null;
+            }),
             'headline' => $this->headline,
             'overview' => $this->overview,
             'hourly_rate' => $this->hourly_rate ? (float) $this->hourly_rate : null,

@@ -41,11 +41,11 @@ Broadcast::channel('contract.{userId}', function ($user, $userId) {
     return (int) $user->id === (int) $userId;
 });
 
-// Admin channels — only admins can listen.
+// Admin channels — only authorized admins (by role/permission) or super admin can listen.
 Broadcast::channel('admin.finance', function ($user) {
-    return $user->role === 'admin';
+    return $user->role === 'admin' && ($user->isSuperAdmin() || $user->hasAnyPermission('finance.view', 'payments.view', 'withdrawals.view', 'finance.manage'));
 });
 
 Broadcast::channel('admin.credentials', function ($user) {
-    return $user->role === 'admin';
+    return $user->role === 'admin' && ($user->isSuperAdmin() || $user->hasAnyPermission('users.verify', 'users.view'));
 });

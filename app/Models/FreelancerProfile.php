@@ -15,6 +15,7 @@ class FreelancerProfile extends Model
 
     protected $fillable = [
         'user_id',
+        'category_id',
         'approval_status',
         'approved_at',
         'rejection_reason',
@@ -71,6 +72,11 @@ class FreelancerProfile extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(Category::class);
     }
 
     public function skills(): BelongsToMany

@@ -4,6 +4,7 @@ namespace App\Services\Payment;
 
 use App\Models\Payment;
 use App\Models\Transaction;
+use App\Models\User;
 use App\Models\Wallet;
 use App\Models\Withdrawal;
 use App\Services\AuditService;
@@ -103,6 +104,16 @@ class WithdrawalService
                     $amount,
                     $fee,
                     $netAmount
+                );
+
+                // Notify Finance Admins
+                $userName = User::find($userId)?->name ?? 'A freelancer';
+                NotificationService::notifyAdmins(
+                    ['finance.view', 'withdrawals.view', 'withdrawals.manage'],
+                    'withdrawal_requested',
+                    'New Withdrawal Request',
+                    "{$userName} requested a withdrawal of ETB " . number_format($amount, 2) . " (Ref: {$reference}).",
+                    '/admin/finance'
                 );
             }
 

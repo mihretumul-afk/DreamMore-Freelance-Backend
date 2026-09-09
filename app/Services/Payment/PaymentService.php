@@ -33,7 +33,15 @@ class PaymentService
      */
     public static function calculateFees(float $amount): array
     {
-        $platformFeeRate = (float) config('payment.platform_fee_rate', 0.08);
+        // Read contract/milestone fee percentage configured by admin in settings (default: 8%)
+        $feeSetting = \App\Models\AdminSetting::getValue(
+            'platform_fee_percent',
+            \App\Models\PlatformSetting::get('platform_fee_percent', '8'),
+            'string'
+        );
+        $percent = is_numeric($feeSetting) ? (float) $feeSetting : 8.0;
+        $platformFeeRate = max(0, min(0.50, $percent / 100.0));
+
         $processingFeeRate = (float) config('payment.processing_fee_rate', 0.025);
 
         $platformFee = round($amount * $platformFeeRate, 2);

@@ -111,7 +111,7 @@ class AddFundsService
         if ($user && $user->role === 'freelancer') {
             $returnUrlBase = 'http://localhost:5173/freelancer/withdrawals';
         } elseif ($user && $user->role === 'employer') {
-            $returnUrlBase = 'http://localhost:5173/employer/settings/payment-methods';
+            $returnUrlBase = 'http://localhost:5173/employer/finance';
         }
 
         // ── Charge via provider ────────────────────────────────────────
@@ -265,6 +265,16 @@ class AddFundsService
                 $payment->reference,
                 $amount,
                 $newBalance
+            );
+
+            // ── Notify Finance Admins ─────────────────────────────────
+            $payerName = User::find($payment->payer_id)?->name ?? 'A user';
+            NotificationService::notifyAdmins(
+                ['finance.view', 'payments.view'],
+                'wallet_deposit_completed',
+                'Wallet Deposit Confirmed',
+                "{$payerName} added ETB " . number_format($amount, 2) . " to wallet (Ref: {$payment->reference}).",
+                '/admin/finance'
             );
 
             Log::info('[Add Funds] Deposit confirmed and wallet credited', [

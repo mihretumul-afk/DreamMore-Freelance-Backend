@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Admin;
 use App\Http\Controllers\Api\V1\BaseApiController;
 use App\Http\Requests\UpdateAdminSettingsRequest;
 use App\Models\AdminSetting;
+use App\Models\PlatformSetting;
 use App\Services\AuditService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -16,6 +17,12 @@ class SettingController extends BaseApiController
         'platform_description' => ['value' => 'The Ethiopian freelance marketplace', 'type' => 'string'],
         'default_currency'     => ['value' => 'ETB', 'type' => 'string'],
 
+        // Contract / Milestone fee setting
+        'platform_fee_percent' => ['value' => '8', 'type' => 'string'],
+
+        // Milestone auto-release timeframe (days unreviewed before escrow released to freelancer)
+        'auto_release_days'    => ['value' => '14', 'type' => 'integer'],
+
         // Contact page (footer Contact button → /contact)
         'contact_email'    => ['value' => 'support@appworks.et', 'type' => 'string'],
         'contact_phone'    => ['value' => '+251 911 234 567', 'type' => 'string'],
@@ -25,8 +32,6 @@ class SettingController extends BaseApiController
         'contact_extras'   => ['value' => '[]', 'type' => 'json'],
         // Social media links shown in the footer: [{ platform, url }]
         'social_links'     => ['value' => '[{"platform":"github","url":""},{"platform":"telegram","url":""},{"platform":"facebook","url":""},{"platform":"instagram","url":""}]', 'type' => 'json'],
-        'min_proposal_amount'  => ['value' => '', 'type' => 'string'],
-        'max_proposal_amount'  => ['value' => '', 'type' => 'string'],
         'registration_open'    => ['value' => 'true', 'type' => 'boolean'],
         'maintenance_mode'     => ['value' => 'false', 'type' => 'boolean'],
 
@@ -61,9 +66,9 @@ class SettingController extends BaseApiController
                 'social_links'         => $raw['social_links'] ?? [],
             ],
             'payments' => [
-                'default_currency'    => $raw['default_currency'],
-                'min_proposal_amount' => $raw['min_proposal_amount'],
-                'max_proposal_amount' => $raw['max_proposal_amount'],
+                'default_currency'     => $raw['default_currency'],
+                'platform_fee_percent' => $raw['platform_fee_percent'],
+                'auto_release_days'    => $raw['auto_release_days'],
             ],
             'access'   => [
                 'registration_open' => $raw['registration_open'],
@@ -109,6 +114,11 @@ class SettingController extends BaseApiController
                 if ($value !== null) {
                     $type = self::DEFAULT_SETTINGS[$key]['type'] ?? 'string';
                     AdminSetting::setValue($key, $value, $type);
+
+                    // Sync platform fee percentage with PlatformSetting store as well
+                    if ($key === 'platform_fee_percent') {
+                        PlatformSetting::set('platform_fee_percent', (string) $value);
+                    }
                 }
             }
 

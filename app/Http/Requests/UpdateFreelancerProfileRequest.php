@@ -14,6 +14,7 @@ class UpdateFreelancerProfileRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'category_id' => ['nullable', 'integer', 'exists:categories,id'],
             'headline' => ['nullable', 'string', 'max:255'],
             'overview' => ['nullable', 'string', 'max:5000'],
             'hourly_rate' => ['nullable', 'numeric', 'min:0', 'max:9999.99'],

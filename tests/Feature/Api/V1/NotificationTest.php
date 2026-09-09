@@ -3,7 +3,10 @@
 namespace Tests\Feature\Api\V1;
 
 use App\Models\Notification;
+use App\Models\Role;
 use App\Models\User;
+use App\Services\NotificationService;
+use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -153,6 +156,78 @@ class NotificationTest extends TestCase
         foreach ($notifications as $n) {
             $this->assertEquals($user1->id, $n['user_id']);
         }
+    }
+
+    private function createAdminWithRole(string $roleSlug): User
+    {
+        $this->seed(RbacSeeder::class);
+
+        $user = $this->createUser('admin');
+        $role = Role::where('slug', $roleSlug)->firstOrFail();
+        $user->adminRoles()->attach($role->id, [
+            'assigned_by' => null,
+            'assigned_at' => now(),
+        ]);
+
+        return $user;
+    }
+
+    public function test_finance_notification_only_reaches_finance_and_super_admins(): void
+    {
+        $superAdmin = $this->createAdminWithRole(Role::SUPER_ADMIN);
+        $financeAdmin = $this->createAdminWithRole(Role::FINANCE_ADMIN);
+        $supportAdmin = $this->createAdminWithRole(Role::SUPPORT_ADMIN);
+        $disputeAdmin = $this->createAdminWithRole(Role::DISPUTE_ADMIN);
+
+        NotificationService::notifyAdmins(
+            'finance.view',
+            'withdrawal_requested',
+            'Withdrawal Requested',
+            'A user requested a withdrawal.'
+        );
+
+        // Super Admin and Finance Admin receive it
+        $this->assertDatabaseHas('notifications', ['user_id' => $superAdmin->id, 'type' => 'withdrawal_requested']);
+        $this->assertDatabaseHas('notifications', ['user_id' => $financeAdmin->id, 'type' => 'withdrawal_requested']);
+
+        // Support and Dispute admins do NOT
+        $this->assertDatabaseMissing('notifications', ['user_id' => $supportAdmin->id, 'type' => 'withdrawal_requested']);
+        $this->assertDatabaseMissing('notifications', ['user_id' => $disputeAdmin->id, 'type' => 'withdrawal_requested']);
+    }
+
+    public function test_verification_notification_reaches_support_admins_only(): void
+    {
+        $superAdmin = $this->createAdminWithRole(Role::SUPER_ADMIN);
+        $financeAdmin = $this->createAdminWithRole(Role::FINANCE_ADMIN);
+        $supportAdmin = $this->createAdminWithRole(Role::SUPPORT_ADMIN);
+
+        NotificationService::notifyAdmins(
+            'users.verify',
+            'credential_submitted',
+            'New Credential Submitted',
+            'A user submitted a credential for review.'
+        );
+
+        $this->assertDatabaseHas('notifications', ['user_id' => $superAdmin->id, 'type' => 'credential_submitted']);
+        $this->assertDatabaseHas('notifications', ['user_id' => $supportAdmin->id, 'type' => 'credential_submitted']);
+        $this->assertDatabaseMissing('notifications', ['user_id' => $financeAdmin->id, 'type' => 'credential_submitted']);
+    }
+
+    public function test_admin_without_role_receives_no_admin_notifications(): void
+    {
+        $this->seed(RbacSeeder::class);
+        $rolelessAdmin = $this->createUser('admin');
+        $financeAdmin = $this->createAdminWithRole(Role::FINANCE_ADMIN);
+
+        NotificationService::notifyAdmins(
+            'finance.view',
+            'withdrawal_requested',
+            'Withdrawal Requested',
+            'A user requested a withdrawal.'
+        );
+
+        $this->assertDatabaseHas('notifications', ['user_id' => $financeAdmin->id, 'type' => 'withdrawal_requested']);
+        $this->assertDatabaseMissing('notifications', ['user_id' => $rolelessAdmin->id, 'type' => 'withdrawal_requested']);
     }
 
     public function test_notifications_can_be_filtered_by_read_status(): void

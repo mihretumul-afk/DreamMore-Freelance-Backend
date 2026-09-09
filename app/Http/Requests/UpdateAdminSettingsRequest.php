@@ -17,6 +17,8 @@ class UpdateAdminSettingsRequest extends FormRequest
             'platform_name'        => ['nullable', 'string', 'max:255'],
             'platform_description' => ['nullable', 'string', 'max:2000'],
             'default_currency'     => ['nullable', 'string', 'max:10'],
+            'platform_fee_percent' => ['nullable', 'numeric', 'min:0', 'max:50'],
+            'auto_release_days'    => ['nullable', 'integer', 'min:1', 'max:90'],
 
             // Contact page details (footer Contact button → /contact)
             'contact_email'    => ['nullable', 'email', 'max:255'],
@@ -32,8 +34,6 @@ class UpdateAdminSettingsRequest extends FormRequest
             'social_links'         => ['nullable', 'array', 'max:20'],
             'social_links.*.platform' => ['required', 'string', 'in:github,telegram,facebook,instagram,linkedin,youtube,x,whatsapp,website'],
             'social_links.*.url'      => ['nullable', 'string', 'max:255'],
-            'min_proposal_amount'  => ['nullable', 'string'],
-            'max_proposal_amount'  => ['nullable', 'string'],
             'registration_open'    => ['nullable', 'string', 'in:true,false'],
             'maintenance_mode'     => ['nullable', 'string', 'in:true,false'],
 
@@ -50,8 +50,14 @@ class UpdateAdminSettingsRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'contact_email.email'    => 'Please provide a valid contact email address.',
-            'contact_extras.max'     => 'You can add up to 20 additional contacts.',
+            'platform_fee_percent.numeric' => 'Contract / milestone platform fee percentage must be a valid number.',
+            'platform_fee_percent.min'     => 'Contract / milestone fee cannot be negative.',
+            'platform_fee_percent.max'     => 'Contract / milestone fee cannot exceed 50%.',
+            'auto_release_days.integer'    => 'Milestone auto-release timeframe must be a whole number of days.',
+            'auto_release_days.min'        => 'Milestone auto-release timeframe must be at least 1 day.',
+            'auto_release_days.max'        => 'Milestone auto-release timeframe cannot exceed 90 days.',
+            'contact_email.email'          => 'Please provide a valid contact email address.',
+            'contact_extras.max'           => 'You can add up to 20 additional contacts.',
             'contact_extras.*.type.in'    => 'Each extra contact must use a supported type.',
             'contact_extras.*.value.required' => 'Each extra contact needs a value.',
             'social_links.max'           => 'You can add up to 20 social media links.',

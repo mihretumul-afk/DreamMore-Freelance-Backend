@@ -144,6 +144,7 @@ class DisputeController extends BaseApiController
 
         // Notify Admins only (user communicates directly with admin mediation)
         NotificationService::notifyAdmins(
+            'disputes.review',
             'dispute_update',
             'Dispute Reply Received',
             "{$user->name} ({$user->role}) added a note on dispute #{$report->id}.",
