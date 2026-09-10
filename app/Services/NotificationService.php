@@ -3,12 +3,64 @@
 namespace App\Services;
 
 use App\Events\NotificationCreated;
+use App\Http\Middleware\TrackLastSeen;
+use App\Mail\DisputeRaisedEmail;
+use App\Mail\EscrowFundedEmail;
+use App\Mail\MilestoneFundedEmail;
+use App\Mail\MilestonePaidEmail;
+use App\Mail\MilestoneSubmittedEmail;
+use App\Mail\NewProposalEmail;
+use App\Mail\NewMessageEmail;
+use App\Mail\ProposalAcceptedEmail;
+use App\Mail\WithdrawalCompletedEmail;
+use App\Mail\WithdrawalFailedEmail;
 use App\Models\Notification;
 use App\Models\Role;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Mail;
+use Throwable;
 
 class NotificationService
 {
+    /**
+     * Send a queued email to a user. Purely additive: any mail failure is
+     * logged and swallowed so in-app notifications keep working exactly as
+     * before. Emails are queued on the database connection, so a slow or
+     * down mail provider never blocks a user-facing request.
+     */
+    protected static function sendEmail(int $userId, object $mailable): void
+    {
+        try {
+            $user = User::find($userId);
+
+            if (! $user || ! $user->email) {
+                return;
+            }
+
+            Mail::to($user->email)->queue($mailable);
+        } catch (Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Failed to queue email notification', [
+                'user_id' => $userId,
+                'mailable' => $mailable::class,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Check whether the user is currently online (active in the last 5
+     * minutes, tracked by TrackLastSeen middleware).
+     */
+    public static function isUserOnline(int $userId): bool
+    {
+        try {
+            return Cache::has(TrackLastSeen::ONLINE_KEY.":{$userId}");
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
     /**
      * Create a notification for a user and broadcast it in real-time.
      */
@@ -46,13 +98,22 @@ class NotificationService
      */
     public static function newProposal(int $employerId, string $freelancerName, string $jobTitle, int $jobId): Notification
     {
-        return self::create(
+        $notification = self::create(
             $employerId,
             'new_proposal',
             'New Proposal Received',
             "{$freelancerName} submitted a proposal for '{$jobTitle}'.",
             "/employer/jobs/{$jobId}/proposals"
         );
+
+        self::sendEmail($employerId, new NewProposalEmail(
+            User::find($employerId)?->name ?? 'there',
+            $freelancerName,
+            $jobTitle,
+            $jobId,
+        ));
+
+        return $notification;
     }
 
     /**
@@ -72,13 +133,24 @@ class NotificationService
             'accepted' => "/freelancer/contracts",
         ];
 
-        return self::create(
+        $notification = self::create(
             $freelancerId,
             'proposal_' . $status,
             'Proposal ' . ucfirst($status),
             $messages[$status] ?? "Your proposal status for '{$jobTitle}' has changed to {$status}.",
             $links[$status] ?? "/freelancer/proposals"
         );
+
+        // Email only on acceptance — the contract offer is the important,
+        // actionable event. Shortlist/rejection stay in-app only.
+        if ($status === 'accepted') {
+            self::sendEmail($freelancerId, new ProposalAcceptedEmail(
+                User::find($freelancerId)?->name ?? 'there',
+                $jobTitle,
+            ));
+        }
+
+        return $notification;
     }
 
     /**
@@ -150,28 +222,84 @@ class NotificationService
     public static function milestoneFunded(int $freelancerId, string $milestoneTitle, string $contractTitle, int $contractId, float $amount): Notification
     {
         $formatted = 'ETB ' . number_format($amount, 2);
-        return self::create(
+        $notification = self::create(
             $freelancerId,
             'milestone_funded',
             'Milestone Funded',
             "Milestone \"{$milestoneTitle}\" ({$formatted}) in contract \"{$contractTitle}\" has been funded. You can now start working!",
             "/freelancer/contracts/{$contractId}"
         );
+
+        self::sendEmail($freelancerId, new MilestoneFundedEmail(
+            User::find($freelancerId)?->name ?? 'there',
+            $milestoneTitle,
+            $contractTitle,
+            $contractId,
+            $amount,
+        ));
+
+        return $notification;
     }
 
     /**
      * Notify freelancer that payment has been released.
      */
-    public static function milestonePaid(int $freelancerId, string $milestoneTitle, int $contractId, float $amount): Notification
-    {
+    public static function milestonePaid(
+        int $freelancerId,
+        string $milestoneTitle,
+        int $contractId,
+        float $amount,
+        float $platformFee = 0.0,
+        ?string $reference = null,
+        ?string $contractTitle = null,
+    ): Notification {
         $formatted = 'ETB ' . number_format($amount, 2);
-        return self::create(
+        $notification = self::create(
             $freelancerId,
             'milestone_paid',
             'Payment Released',
             "You received {$formatted} for completing milestone \"{$milestoneTitle}\". The funds are now in your pending balance.",
             "/freelancer/contracts/{$contractId}"
         );
+
+        self::sendEmail($freelancerId, new MilestonePaidEmail(
+            User::find($freelancerId)?->name ?? 'there',
+            $reference ?? 'Milestone-'.$contractId,
+            $milestoneTitle,
+            $contractTitle ?? "Contract #{$contractId}",
+            $contractId,
+            $amount + $platformFee,
+            $platformFee,
+            $amount,
+        ));
+
+        return $notification;
+    }
+
+    /**
+     * Email the EMPLOYER that their escrow payment for a milestone was
+     * confirmed. Email-only: no in-app notification is created for this
+     * today, and adding one would change existing behavior — this wiring
+     * is strictly additive.
+     */
+    public static function employerEscrowFunded(
+        int $employerId,
+        string $reference,
+        string $milestoneTitle,
+        string $contractTitle,
+        int $contractId,
+        float $amount,
+        float $fee = 0.0,
+    ): void {
+        self::sendEmail($employerId, new EscrowFundedEmail(
+            User::find($employerId)?->name ?? 'there',
+            $reference,
+            $milestoneTitle,
+            $contractTitle,
+            $contractId,
+            $amount,
+            $fee,
+        ));
     }
 
     /**
@@ -195,13 +323,23 @@ class NotificationService
     public static function withdrawalCompleted(int $userId, string $reference, float $amount, float $fee, float $netAmount): Notification
     {
         $formatted = 'ETB ' . number_format($netAmount, 2);
-        return self::create(
+        $notification = self::create(
             $userId,
             'withdrawal_completed',
             'Withdrawal Completed',
             "Your withdrawal of {$formatted} has been processed and sent to your account.",
             '/freelancer/earnings'
         );
+
+        self::sendEmail($userId, new WithdrawalCompletedEmail(
+            User::find($userId)?->name ?? 'there',
+            $reference,
+            $amount,
+            $fee,
+            $netAmount,
+        ));
+
+        return $notification;
     }
 
     /**
@@ -210,13 +348,22 @@ class NotificationService
     public static function withdrawalFailed(int $userId, string $reference, float $amount, string $reason): Notification
     {
         $formatted = 'ETB ' . number_format($amount, 2);
-        return self::create(
+        $notification = self::create(
             $userId,
             'withdrawal_failed',
             'Withdrawal Failed',
             "Your withdrawal of {$formatted} could not be processed. The amount has been returned to your balance.",
             '/freelancer/earnings'
         );
+
+        self::sendEmail($userId, new WithdrawalFailedEmail(
+            User::find($userId)?->name ?? 'there',
+            $reference,
+            $amount,
+            $reason,
+        ));
+
+        return $notification;
     }
 
     /**
@@ -313,15 +460,29 @@ class NotificationService
     /**
      * Notify about new message.
      */
-    public static function messageReceived(int $receiverId, string $senderName): Notification
+    public static function messageReceived(int $receiverId, string $senderName, ?string $messagePreview = null): Notification
     {
-        return self::create(
+        $notification = self::create(
             $receiverId,
             'message_received',
             'New Message',
             "You have a new message from {$senderName}.",
             '/freelancer/messages'
         );
+
+        // Email only when the recipient is offline. Active users see the
+        // in-app + realtime notification immediately, so an email would be
+        // spam. Queued with a 60s delay so a run of quick messages while
+        // the user is still offline produces at most one email.
+        if (! self::isUserOnline($receiverId)) {
+            self::sendEmail($receiverId, new NewMessageEmail(
+                User::find($receiverId)?->name ?? 'there',
+                $senderName,
+                $messagePreview ? str($messagePreview)->limit(120) : 'Open Dream More to read the message.',
+            ));
+        }
+
+        return $notification;
     }
 
     /**
@@ -430,6 +591,28 @@ class NotificationService
     }
 
     /**
+     * Query active admins whose active role grants at least one of the
+     * given permissions. Super Admins are always included.
+     *
+     * @param string[] $permsList
+     */
+    protected static function adminsWithPermissions(array $permsList): \Illuminate\Support\Collection
+    {
+        return User::where('role', 'admin')
+            ->where('status', 'active')
+            ->where(function ($query) use ($permsList) {
+                $query->whereHas('adminRoles', function ($roleQuery) use ($permsList) {
+                    $roleQuery->where('is_active', true)
+                        ->where(function ($roleInner) use ($permsList) {
+                            $roleInner->where('slug', Role::SUPER_ADMIN)
+                                ->orWhereHas('permissions', fn ($permissionQuery) => $permissionQuery->whereIn('slug', $permsList));
+                        });
+                });
+            })
+            ->get();
+    }
+
+    /**
      * Notify administrators of an administrative event, routed by role.
      *
      * Only active admins whose active role grants at least one of the given permissions
@@ -445,21 +628,54 @@ class NotificationService
     {
         $permsList = array_values((array) $permissions);
 
-        $admins = User::where('role', 'admin')
-            ->where('status', 'active')
-            ->where(function ($query) use ($permsList) {
-                $query->whereHas('adminRoles', function ($roleQuery) use ($permsList) {
-                    $roleQuery->where('is_active', true)
-                        ->where(function ($roleInner) use ($permsList) {
-                            $roleInner->where('slug', Role::SUPER_ADMIN)
-                                ->orWhereHas('permissions', fn ($permissionQuery) => $permissionQuery->whereIn('slug', $permsList));
-                        });
-                });
-            })
-            ->get();
+        $admins = self::adminsWithPermissions($permsList);
 
         foreach ($admins as $admin) {
             self::create($admin->id, $type, $title, $message, $link);
+        }
+    }
+
+    /**
+     * Email a contract party (employer or freelancer) about a raised dispute.
+     */
+    public static function disputeEmail(
+        int $userId,
+        string $contractTitle,
+        int $contractId,
+        string $milestoneTitle,
+        string $reason,
+        string $role,
+    ): void {
+        self::sendEmail($userId, new DisputeRaisedEmail(
+            User::find($userId)?->name ?? 'there',
+            $contractTitle,
+            $contractId,
+            $milestoneTitle,
+            $reason,
+            $role,
+        ));
+    }
+
+    /**
+     * Email admins with dispute-review permission about a new dispute.
+     */
+    public static function disputeAdminEmail(
+        string $contractTitle,
+        int $contractId,
+        string $milestoneTitle,
+        string $reason,
+    ): void {
+        $admins = self::adminsWithPermissions(['disputes.review']);
+
+        foreach ($admins as $admin) {
+            self::sendEmail($admin->id, new DisputeRaisedEmail(
+                $admin->name,
+                $contractTitle,
+                $contractId,
+                $milestoneTitle,
+                $reason,
+                'admin',
+            ));
         }
     }
 

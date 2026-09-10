@@ -37,27 +37,32 @@ class SavedFreelancerController extends BaseApiController
     /**
      * Save a freelancer profile for the authenticated user.
      */
-    public function save(Request $request, FreelancerProfile $freelancer): JsonResponse
+    public function save(Request $request, string $freelancer): JsonResponse
     {
         $user = $request->user();
 
-        // Ensure target freelancer exists, is active, and is approved.
-        if (! $freelancer->user || $freelancer->user->status !== 'active' || $freelancer->user->role !== 'freelancer') {
+        $profile = $this->resolveFreelancerProfile($freelancer);
+        if (! $profile) {
             return $this->sendError('Freelancer profile not found.', [], 404);
         }
 
-        if ($freelancer->approval_status !== 'approved') {
+        // Ensure target freelancer exists, is active, and is approved.
+        if (! $profile->user || $profile->user->status !== 'active' || $profile->user->role !== 'freelancer') {
+            return $this->sendError('Freelancer profile not found.', [], 404);
+        }
+
+        if ($profile->approval_status !== 'approved') {
             return $this->sendError('Freelancer profile not found.', [], 404);
         }
 
         // Prevent saving your own profile.
-        if ($user->id === $freelancer->user_id) {
+        if ($user->id === $profile->user_id) {
             return $this->sendError('You cannot save your own profile.', [], 422);
         }
 
         // Check for duplicate save.
         $exists = SavedFreelancer::where('user_id', $user->id)
-            ->where('freelancer_profile_id', $freelancer->id)
+            ->where('freelancer_profile_id', $profile->id)
             ->exists();
 
         if ($exists) {
@@ -66,7 +71,7 @@ class SavedFreelancerController extends BaseApiController
 
         $saved = SavedFreelancer::create([
             'user_id' => $user->id,
-            'freelancer_profile_id' => $freelancer->id,
+            'freelancer_profile_id' => $profile->id,
         ]);
 
         $saved->load(['freelancerProfile.user', 'freelancerProfile.skills']);
@@ -81,11 +86,12 @@ class SavedFreelancerController extends BaseApiController
     /**
      * Check whether a freelancer is saved by the authenticated user.
      */
-    public function saved(Request $request, FreelancerProfile $freelancer): JsonResponse
+    public function saved(Request $request, string $freelancer): JsonResponse
     {
         $user = $request->user();
 
-        if (! $freelancer->user || $freelancer->user->status !== 'active' || $freelancer->user->role !== 'freelancer') {
+        $profile = $this->resolveFreelancerProfile($freelancer);
+        if (! $profile || ! $profile->user || $profile->user->status !== 'active' || $profile->user->role !== 'freelancer') {
             return $this->sendResponse(
                 ['saved' => false],
                 'Freelancer is not saved.'
@@ -93,7 +99,7 @@ class SavedFreelancerController extends BaseApiController
         }
 
         $isSaved = SavedFreelancer::where('user_id', $user->id)
-            ->where('freelancer_profile_id', $freelancer->id)
+            ->where('freelancer_profile_id', $profile->id)
             ->exists();
 
         return $this->sendResponse(
@@ -105,12 +111,17 @@ class SavedFreelancerController extends BaseApiController
     /**
      * Remove a saved freelancer for the authenticated user.
      */
-    public function destroy(Request $request, FreelancerProfile $freelancer): JsonResponse
+    public function destroy(Request $request, string $freelancer): JsonResponse
     {
         $user = $request->user();
 
+        $profile = $this->resolveFreelancerProfile($freelancer);
+        if (! $profile) {
+            return $this->sendError('This freelancer is not in your saved list.', [], 404);
+        }
+
         $deleted = SavedFreelancer::where('user_id', $user->id)
-            ->where('freelancer_profile_id', $freelancer->id)
+            ->where('freelancer_profile_id', $profile->id)
             ->delete();
 
         if (!$deleted) {
@@ -118,6 +129,19 @@ class SavedFreelancerController extends BaseApiController
         }
 
         return $this->sendResponse(null, 'Freelancer removed from saved list.');
+    }
+
+    /**
+     * Resolve FreelancerProfile by primary key ID or associated User ID.
+     */
+    private function resolveFreelancerProfile(string $id): ?FreelancerProfile
+    {
+        return FreelancerProfile::with('user')
+            ->where(function ($query) use ($id) {
+                $query->where('id', $id)
+                    ->orWhere('user_id', $id);
+            })
+            ->first();
     }
 
     /**

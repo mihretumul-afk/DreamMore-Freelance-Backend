@@ -180,6 +180,16 @@ class PaymentService
                 $amount
             );
 
+            // Email employer: escrow payment confirmed (additive, email-only)
+            NotificationService::employerEscrowFunded(
+                $employerId,
+                $payment->reference,
+                $milestone->title,
+                $contract->title,
+                $contract->id,
+                $amount
+            );
+
             // Mark that we should broadcast after commit
             $shouldBroadcast = true;
             $freelancerId = $contract->freelancer_id;
@@ -297,12 +307,15 @@ class PaymentService
                 'freelancer_id'   => $freelancerId,
             ]);
 
-            // Notify freelancer
+            // Notify freelancer (in-app + queued email with fee breakdown)
             NotificationService::milestonePaid(
                 $freelancerId,
                 $milestone->title,
                 $contract->id,
-                $releaseAmount
+                $releaseAmount,
+                $platformFee,
+                $releasePayment->reference,
+                $contract->title,
             );
 
             // Check if all milestones are released → contract completed
@@ -344,97 +357,150 @@ class PaymentService
 
     /**
      * Process a refund.
+     *
+     * MONEY-INTEGRITY CONTRACT (all-or-nothing):
+     *  - The refund payment row, wallet credit, original-payment refund flag
+     *    and ledger entry are written inside ONE database transaction with
+     *    the wallet row locked, so the wallet balance and the ledger can
+     *    never disagree.
+     *  - Refunds are WALLET refunds: money returns to the payer's Dream
+     *    More wallet, fully within our control. The external provider
+     *    (Chapa) is never trusted to move money for a refund; its API
+     *    support for refunds is not guaranteed and previously returned
+     *    success=false while the caller still announced success.
+     *  - Duplicate protection: the original payment row is locked, its
+     *    refund flag is checked, AND any prior completed refund payment
+     *    (metadata.original_payment_id) blocks a second refund.
+     *  - Throws \RuntimeException on any failure; the DB transaction rolls
+     *    back, leaving NO refund row, NO wallet credit and NO notification.
+     *    Callers must only announce success when this method returns.
+     *
+     * @throws \RuntimeException
      */
     public function processRefund(Payment $originalPayment, int $actorId, string $reason = ''): Payment
     {
         $refund = DB::transaction(function () use ($originalPayment, $actorId, $reason) {
-            if ($originalPayment->status !== Payment::STATUS_COMPLETED) {
+            // Lock the original payment row so two concurrent refund
+            // requests cannot both pass the duplicate checks below.
+            $payment = Payment::whereKey($originalPayment->id)->lockForUpdate()->first();
+
+            if (!$payment || $payment->status !== Payment::STATUS_COMPLETED) {
                 throw new \RuntimeException('Only completed payments can be refunded.');
             }
-            if ($originalPayment->isRefunded()) {
+
+            if ($payment->isRefunded()) {
                 throw new \RuntimeException('This payment has already been refunded.');
             }
 
-            $refundAmount = (float) $originalPayment->amount;
+            // Duplicate protection that survives status drift: if ANY prior
+            // completed refund payment already exists for this payment, refuse.
+            $existingRefund = Payment::where('type', Payment::TYPE_REFUND)
+                ->where('status', Payment::STATUS_COMPLETED)
+                ->where('metadata->original_payment_id', $payment->id)
+                ->exists();
 
-            // Call provider refund
-            $result = $this->provider->refund(
-                $originalPayment->provider_reference ?? '',
-                $refundAmount,
-                $reason
-            );
+            if ($existingRefund) {
+                throw new \RuntimeException('This payment has already been refunded.');
+            }
 
-            $refundData = [
+            $refundAmount = (float) $payment->amount;
+
+            // Credit the payer's wallet with row locking BEFORE writing the
+            // refund row, so the balance and the refund row commit together.
+            // Auto-create the wallet if the payer has none (e.g. legacy payment
+            // made before wallets existed) — a refund must never be lost
+            // because the wallet row is missing.
+            Wallet::forUser($payment->payer_id);
+            $wallet = Wallet::where('user_id', $payment->payer_id)->lockForUpdate()->first();
+
+            if (!$wallet) {
+                throw new \RuntimeException('Payer wallet could not be created.');
+            }
+
+            $balanceBefore = (float) $wallet->available_balance;
+            $wallet->increment('available_balance', $refundAmount);
+            $wallet->refresh();
+            $balanceAfter = (float) $wallet->available_balance;
+
+            // Create the refund payment record
+            $refund = Payment::create([
                 'reference'          => Payment::generateReference(),
-                'payer_id'           => $originalPayment->payee_id ?? $originalPayment->payer_id,
-                'payee_id'           => $originalPayment->payer_id,
-                'milestone_id'       => $originalPayment->milestone_id,
+                'payer_id'           => $payment->payer_id,
+                'payee_id'           => $payment->payer_id,
+                'milestone_id'       => $payment->milestone_id,
                 'type'               => Payment::TYPE_REFUND,
                 'amount'             => $refundAmount,
                 'platform_fee'       => 0,
                 'processing_fee'     => 0,
                 'net_amount'         => $refundAmount,
-                'currency'           => $originalPayment->currency,
-                'status'             => $result['success'] ? Payment::STATUS_COMPLETED : Payment::STATUS_FAILED,
-                'provider_reference' => $result['provider_reference'] ?? null,
-            ];
-
-            if ($result['success']) {
-                $refundData['refunded_at'] = now();
-            }
-
-            $refund = Payment::create($refundData);
-
-            // Update original payment refund status
-            if ($result['success']) {
-                $originalPayment->update([
-                    'status'      => Payment::STATUS_REFUNDED,
-                    'refunded_at' => now(),
-                ]);
-
-                // Credit employer wallet balance
-                $employerWallet = Wallet::forUser($originalPayment->payer_id);
-                $employerWallet->creditAvailable($refundAmount);
-            }
-
-            // Ledger entry
-            $this->recordLedgerTransaction($originalPayment->payer_id, $refundAmount, Transaction::DIR_CREDIT, Transaction::TYPE_REFUND, $refund->id, "Refund for payment {$originalPayment->reference}");
-
-            // Audit
-            AuditService::paymentRefunded($originalPayment->id, $actorId, [
-                'reference'     => $originalPayment->reference,
-                'refund_amount' => $refundAmount,
-                'currency'      => $originalPayment->currency,
-                'reason'        => $reason,
+                'currency'           => $payment->currency,
+                'status'             => Payment::STATUS_COMPLETED,
+                'provider_reference' => 'WALLET-REFUND-'.$payment->reference,
+                'metadata'           => json_encode([
+                    'refund_method'       => 'wallet',
+                    'original_payment_id' => $payment->id,
+                ]),
+                'refunded_at'        => now(),
             ]);
 
-            // Notify
-            NotificationService::paymentRefunded(
-                $originalPayment->payer_id,
-                $originalPayment->reference,
+            // Mark original payment refunded
+            $payment->update([
+                'status'        => Payment::STATUS_REFUNDED,
+                'refund_status' => Payment::REFUND_COMPLETED,
+                'refunded_at'   => now(),
+            ]);
+
+            // Immutable ledger entry with real before/after balances
+            $this->recordLedgerTransaction(
+                $payment->payer_id,
                 $refundAmount,
-                $originalPayment->currency
+                Transaction::DIR_CREDIT,
+                Transaction::TYPE_REFUND,
+                $refund->id,
+                "Refund for payment {$payment->reference}".($reason !== '' ? " \u{2014} {$reason}" : ''),
+                $balanceBefore,
+                $balanceAfter
             );
 
             return $refund;
         });
 
-        // Broadcast finance update AFTER transaction commits so the dashboard
-        // sees the committed data when it re-fetches.
-        if ($refund && $refund->status === Payment::STATUS_COMPLETED) {
-            \App\Events\FinanceUpdated::dispatch('refund_completed', [
-                'payment_id'      => $refund->id,
-                'milestone_id'    => $originalPayment->milestone_id,
-                'amount'          => $refund->amount,
-                'employer_id'     => $originalPayment->payer_id,
-            ], $actorId);
-        }
+        // ── Post-commit: audit + notification + broadcast ────────────────
+        // Only reached when the DB transaction COMMITTED successfully.
+        AuditService::paymentRefunded($originalPayment->id, $actorId, [
+            'reference'        => $originalPayment->reference,
+            'refund_reference' => $refund->reference,
+            'refund_amount'    => (float) $refund->amount,
+            'currency'         => $originalPayment->currency,
+            'reason'           => $reason,
+            'refund_method'    => 'wallet',
+        ]);
+
+        NotificationService::paymentRefunded(
+            $originalPayment->payer_id,
+            $originalPayment->reference,
+            (float) $refund->amount,
+            $originalPayment->currency
+        );
+
+        \App\Events\FinanceUpdated::dispatch('refund_completed', [
+            'payment_id'   => $refund->id,
+            'milestone_id' => $originalPayment->milestone_id,
+            'amount'       => (float) $refund->amount,
+            'employer_id'  => $originalPayment->payer_id,
+        ], $actorId);
 
         return $refund;
     }
 
     /**
      * Refund a funded milestone back to the employer.
+     *
+     * Throws when no completed escrow payment exists — a "refund" without
+     * funds to return is a FAILURE, never a silent milestone cancellation.
+     * On any failure the milestone keeps its current status (e.g. disputed).
+     *
+     * @throws \RuntimeException
      */
     public function refundMilestone(Milestone $milestone, ?int $actorId, string $reason = ''): Payment
     {
@@ -442,15 +508,18 @@ class PaymentService
             $payment = Payment::where('milestone_id', $milestone->id)
                 ->where('type', Payment::TYPE_ESCROW_FUNDED)
                 ->where('status', Payment::STATUS_COMPLETED)
+                ->lockForUpdate()
                 ->first();
 
             if (!$payment) {
-                $milestone->update(['status' => Milestone::STATUS_CANCELLED]);
-                return new Payment();
+                throw new \RuntimeException(
+                    "Cannot refund milestone \"{$milestone->title}\": no completed escrow payment exists for it."
+                );
             }
 
-            $refund = $this->processRefund($payment, $actorId, $reason);
+            $refund = $this->processRefund($payment, $actorId ?? 0, $reason);
 
+            // Only reached on successful refund — cancel the milestone.
             $milestone->update(['status' => Milestone::STATUS_CANCELLED]);
 
             return $refund;
@@ -624,6 +693,12 @@ class PaymentService
 
     /**
      * Record a ledger transaction.
+     *
+     * $balanceBefore/$balanceAfter are optional: when provided (by
+     * balance-mutating flows like refunds) they record the REAL wallet
+     * balances observed inside the same locked transaction. When omitted,
+     * the current balance is used for both (legacy behavior for flows that
+     * write the ledger before mutating the wallet).
      */
     private function recordLedgerTransaction(
         int $userId,
@@ -631,7 +706,9 @@ class PaymentService
         string $direction,
         string $type,
         ?int $paymentId = null,
-        string $description = ''
+        string $description = '',
+        ?float $balanceBefore = null,
+        ?float $balanceAfter = null
     ): void {
         $wallet = Wallet::forUser($userId);
         $currentBalance = (float) ($wallet->available_balance ?? 0.00);
@@ -644,8 +721,8 @@ class PaymentService
             'direction'      => $direction,
             'type'           => $type,
             'amount'         => $amount,
-            'balance_before' => $currentBalance,
-            'balance_after'  => $currentBalance,
+            'balance_before' => $balanceBefore ?? $currentBalance,
+            'balance_after'  => $balanceAfter ?? $currentBalance,
             'currency'       => 'ETB',
             'status'         => Transaction::STATUS_COMPLETED,
             'description'    => $description,

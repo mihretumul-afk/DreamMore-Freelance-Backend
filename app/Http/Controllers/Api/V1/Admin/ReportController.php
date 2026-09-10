@@ -169,22 +169,31 @@ class ReportController extends BaseApiController
         $resolutionType = $request->input('resolution_type');
         $resolutionNote = $request->input('resolution');
 
-        DB::transaction(function () use ($report, $actor, $resolutionType, $resolutionNote) {
-            // Update the report
-            $report->update([
-                'status'           => 'resolved',
-                'resolution'       => $resolutionNote,
-                'resolution_type'  => $resolutionType,
-                'resolved_at'      => now(),
-            ]);
+        // MONEY-INTEGRITY: the financial side of a resolution (release or
+        // refund) must succeed or the resolution fails. A failed money
+        // movement now rolls back the ENTIRE resolution (report stays
+        // pending) and returns an explicit error — we never announce a
+        // "refunded"/"released" outcome that did not actually happen.
+        try {
+            [$disputeContext, $moneyMoved] = DB::transaction(function () use ($report, $actor, $resolutionType, $resolutionNote) {
+                // Update the report
+                $report->update([
+                    'status'           => 'resolved',
+                    'resolution'       => $resolutionNote,
+                    'resolution_type'  => $resolutionType,
+                    'resolved_at'      => now(),
+                ]);
 
-            $paymentService = app(PaymentService::class);
+                $paymentService = app(PaymentService::class);
 
-            // Handle milestone disputes
-            if ($report->target_type === 'milestone') {
-                $milestone = Milestone::with('contract')->find($report->target_id);
+                // Handle milestone disputes
+                if ($report->target_type === 'milestone') {
+                    $milestone = Milestone::with('contract')->find($report->target_id);
 
-                if ($milestone && $milestone->contract) {
+                    if (!$milestone || !$milestone->contract) {
+                        throw new \RuntimeException('Milestone or contract not found for this dispute.');
+                    }
+
                     $contract = $milestone->contract;
                     $amount   = (float) $milestone->amount;
 
@@ -207,69 +216,83 @@ class ReportController extends BaseApiController
                             'approved_at' => now(),
                         ]);
 
-                        try {
-                            $paymentService->releaseMilestone($milestone, $actor->id);
-                        } catch (\Exception $e) {
-                            \Illuminate\Support\Facades\Log::warning('Failed to release disputed milestone funds', [
-                                'milestone_id' => $milestone->id,
-                                'error'        => $e->getMessage(),
-                            ]);
-                        }
+                        $paymentService->releaseMilestone($milestone, $actor->id);
 
-                        NotificationService::disputeResolved($contract->freelancer_id, $contract->title, $contract->id, 'freelancer', 'released');
-                        NotificationService::disputeResolved($contract->employer_id, $contract->title, $contract->id, 'employer', 'released');
-
-                    } else {
-                        // Admin rules in favor of employer — refund funds to employer
-                        try {
-                            $paymentService->refundMilestone($milestone, $actor->id, $resolutionNote ?? 'Dispute resolved in favor of employer');
-                        } catch (\Exception $e) {
-                            \Illuminate\Support\Facades\Log::warning('Failed to refund disputed milestone funds', [
-                                'milestone_id' => $milestone->id,
-                                'error'        => $e->getMessage(),
-                            ]);
-                        }
-
-                        NotificationService::disputeResolved($contract->employer_id, $contract->title, $contract->id, 'employer', 'refunded');
-                        NotificationService::disputeResolved($contract->freelancer_id, $contract->title, $contract->id, 'freelancer', 'refunded');
+                        return [[$contract, 'released'], true];
                     }
+
+                    // Admin rules in favor of employer — refund funds to employer
+                    $paymentService->refundMilestone($milestone, $actor->id, $resolutionNote ?? 'Dispute resolved in favor of employer');
+
+                    return [[$contract, 'refunded'], true];
                 }
-            } elseif ($report->target_type === 'contract') {
-                $contract = Contract::with('milestones')->find($report->target_id);
-                if ($contract) {
+
+                if ($report->target_type === 'contract') {
+                    $contract = Contract::with('milestones')->find($report->target_id);
+
+                    if (!$contract) {
+                        throw new \RuntimeException('Contract not found for this dispute.');
+                    }
+
                     $contract->update(['status' => Contract::STATUS_ACTIVE]);
 
                     $targetMilestones = $contract->milestones()
                         ->whereIn('status', [Milestone::STATUS_DISPUTED, Milestone::STATUS_SUBMITTED, Milestone::STATUS_FUNDED, Milestone::STATUS_IN_PROGRESS])
                         ->get();
 
+                    if ($targetMilestones->isEmpty()) {
+                        throw new \RuntimeException('No funded or active milestones found on this contract to settle.');
+                    }
+
+                    $moneyMoved = true;
+
                     foreach ($targetMilestones as $milestone) {
                         if ($resolutionType === 'release_to_freelancer') {
                             $milestone->update(['status' => Milestone::STATUS_APPROVED, 'approved_at' => now()]);
-                            try {
-                                $paymentService->releaseMilestone($milestone, $actor->id);
-                            } catch (\Exception $e) {}
+                            $paymentService->releaseMilestone($milestone, $actor->id);
                         } else {
-                            try {
-                                $paymentService->refundMilestone($milestone, $actor->id, $resolutionNote ?? 'Contract dispute resolved in favor of employer');
-                            } catch (\Exception $e) {}
+                            $paymentService->refundMilestone($milestone, $actor->id, $resolutionNote ?? 'Contract dispute resolved in favor of employer');
                         }
                     }
 
-                    NotificationService::disputeResolved($contract->freelancer_id, $contract->title, $contract->id, 'freelancer', $resolutionType === 'release_to_freelancer' ? 'released' : 'refunded');
-                    NotificationService::disputeResolved($contract->employer_id, $contract->title, $contract->id, 'employer', $resolutionType === 'release_to_freelancer' ? 'released' : 'refunded');
+                    return [[$contract, $resolutionType === 'release_to_freelancer' ? 'released' : 'refunded'], $moneyMoved];
                 }
-            }
 
-            // Audit log
-            AuditService::disputeResolved($report->id, $actor->id, [
-                'reason'          => $report->reason,
-                'target_type'     => $report->target_type,
-                'target_id'       => $report->target_id,
-                'resolution'      => $resolutionNote,
+                throw new \RuntimeException("Unsupported dispute target type '{$report->target_type}'.");
+            });
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Dispute resolution failed — rolled back, report remains pending', [
+                'report_id' => $report->id,
                 'resolution_type' => $resolutionType,
+                'error'     => $e->getMessage(),
             ]);
-        });
+
+            return $this->sendError(
+                'Dispute resolution failed and nothing was changed: ' . $e->getMessage() . ' The dispute remains pending — please retry or contact support.',
+                [],
+                422
+            );
+        }
+
+        [$contract, $outcome] = $disputeContext;
+
+        // ── Post-commit: notifications + audit (money has actually moved) ─
+        if ($outcome === 'released') {
+            NotificationService::disputeResolved($contract->freelancer_id, $contract->title, $contract->id, 'freelancer', 'released');
+            NotificationService::disputeResolved($contract->employer_id, $contract->title, $contract->id, 'employer', 'released');
+        } else {
+            NotificationService::disputeResolved($contract->employer_id, $contract->title, $contract->id, 'employer', 'refunded');
+            NotificationService::disputeResolved($contract->freelancer_id, $contract->title, $contract->id, 'freelancer', 'refunded');
+        }
+
+        // Audit log — after commit, reflecting an outcome that really happened
+        AuditService::disputeResolved($report->id, $actor->id, [
+            'reason'          => $report->reason,
+            'target_type'     => $report->target_type,
+            'target_id'       => $report->target_id,
+            'resolution'      => $resolutionNote,
+            'resolution_type' => $resolutionType,
+        ]);
 
         return $this->sendResponse($report->fresh()->load('reporter'), 'Dispute resolved successfully.');
     }

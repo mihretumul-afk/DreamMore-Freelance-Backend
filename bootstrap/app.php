@@ -20,6 +20,11 @@ return Application::configure(basePath: dirname(__DIR__))
             'verified.freelancer' => \App\Http\Middleware\EnsureVerifiedFreelancer::class,
             'maintenance'        => \App\Http\Middleware\MaintenanceMode::class,
         ]);
+
+        // Lightweight online-presence tracking on all authenticated API
+        // requests (cache-backed, throttled to once/minute/user). Used by
+        // NotificationService to suppress chat emails for active users.
+        $middleware->api()->append(\App\Http\Middleware\TrackLastSeen::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

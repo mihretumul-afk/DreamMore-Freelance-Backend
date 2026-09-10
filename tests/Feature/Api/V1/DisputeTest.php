@@ -131,6 +131,22 @@ class DisputeTest extends TestCase
     {
         $this->contract->update(['status' => 'disputed']);
 
+        // Resolution releases funds to the freelancer, so the milestone must
+        // have a completed escrow payment — money movement is now enforced
+        // (a failed release rolls the whole resolution back).
+        Payment::create([
+            'reference'          => Payment::generateReference(),
+            'payer_id'           => $this->employer->id,
+            'milestone_id'       => $this->milestone->id,
+            'type'               => Payment::TYPE_ESCROW_FUNDED,
+            'amount'             => 50000,
+            'platform_fee'       => 0,
+            'processing_fee'     => 0,
+            'net_amount'         => 50000,
+            'currency'           => 'ETB',
+            'status'             => Payment::STATUS_COMPLETED,
+        ]);
+
         $report = Report::create([
             'reporter_id' => $this->employer->id,
             'target_type' => 'milestone',
@@ -148,7 +164,11 @@ class DisputeTest extends TestCase
         $response->assertStatus(200)
             ->assertJsonPath('data.status', 'resolved');
 
-        $this->assertEquals('active', $this->contract->fresh()->status);
+        // Funds actually released to the freelancer: the milestone was the
+        // contract's only one, so the contract is completed (money movement
+        // is now enforced — previously the release failed silently and the
+        // contract stayed 'active' while claiming success).
+        $this->assertEquals('completed', $this->contract->fresh()->status);
 
         // Both parties received resolution notifications
         $this->assertDatabaseHas('notifications', [

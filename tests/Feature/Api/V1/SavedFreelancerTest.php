@@ -61,6 +61,25 @@ class SavedFreelancerTest extends TestCase
         ]);
     }
 
+    public function test_authenticated_user_can_save_freelancer_by_user_id(): void
+    {
+        $employer = $this->createUser('employer');
+        $freelancerUser = $this->createUser('freelancer');
+        $profile = $this->createFreelancerProfile($freelancerUser);
+
+        $response = $this->actingAsSanctum($employer)
+            ->postJson("/api/v1/freelancers/{$freelancerUser->id}/save");
+
+        $response->assertStatus(201)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.freelancer_profile_id', $profile->id);
+
+        $this->assertDatabaseHas('saved_freelancers', [
+            'user_id' => $employer->id,
+            'freelancer_profile_id' => $profile->id,
+        ]);
+    }
+
     public function test_unauthenticated_user_cannot_save_freelancer(): void
     {
         $freelancerUser = $this->createUser('freelancer');

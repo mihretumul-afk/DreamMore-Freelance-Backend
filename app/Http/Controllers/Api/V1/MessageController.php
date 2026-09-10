@@ -147,10 +147,11 @@ class MessageController extends BaseApiController
             'content' => $validated['content'],
         ]);
 
-        // Notify the receiver
+        // Notify the receiver (email is sent only if they are offline)
         NotificationService::messageReceived(
             $validated['receiver_id'],
-            $user->name
+            $user->name,
+            $validated['content'],
         );
 
         $message->load(['sender:id,name,avatar', 'receiver:id,name,avatar']);

@@ -536,6 +536,22 @@ class MilestoneController extends BaseApiController
                 $otherRole
             );
 
+            // Queued emails to the other party + dispute admins (additive)
+            NotificationService::disputeEmail(
+                $otherUserId,
+                $contract->title,
+                $contract->id,
+                $milestone->title,
+                $validated['reason'],
+                $otherRole
+            );
+            NotificationService::disputeAdminEmail(
+                $contract->title,
+                $contract->id,
+                $milestone->title,
+                $validated['reason']
+            );
+
             AuditService::record(
                 $user,
                 'milestone.disputed',
