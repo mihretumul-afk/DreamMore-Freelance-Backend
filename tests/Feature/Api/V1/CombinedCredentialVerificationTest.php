@@ -88,4 +88,49 @@ class CombinedCredentialVerificationTest extends TestCase
         $this->assertEquals('New Credential & Identity Document Submitted', $notifications->first()->title);
         $this->assertStringContainsString('identity verification document', $notifications->first()->message);
     }
+
+    public function test_approving_credential_automatically_approves_identity_verification_so_admin_only_approves_once(): void
+    {
+        Storage::fake('private');
+        Storage::fake('public');
+
+        $certDoc = UploadedFile::fake()->create('certificate.pdf', 200, 'application/pdf');
+        $idDoc   = UploadedFile::fake()->create('national_id.jpg', 150, 'image/jpeg');
+
+        $submitRes = $this->actingAs($this->freelancer)
+            ->postJson('/api/v1/credentials', [
+                'title' => 'AWS Certified Solutions Architect',
+                'type' => 'external_certificate',
+                'issuing_organization' => 'Amazon',
+                'document' => $certDoc,
+                'verification_document' => $idDoc,
+            ]);
+
+        $credentialId = $submitRes->json('data.id');
+
+        // Admin checks pending verifications list — receives single merged item
+        $listRes = $this->actingAs($this->admin)
+            ->getJson('/api/v1/admin/verifications?status=pending');
+
+        $listRes->assertStatus(200);
+        $this->assertCount(1, $listRes->json('data'));
+
+        // Admin approves the credential ONCE
+        $approveRes = $this->actingAs($this->admin)
+            ->putJson("/api/v1/admin/credentials/{$credentialId}/approve");
+
+        $approveRes->assertStatus(200)
+            ->assertJsonPath('success', true);
+
+        // BOTH Credential and Verification are now approved in database
+        $this->assertDatabaseHas('credentials', [
+            'id' => $credentialId,
+            'status' => 'approved',
+        ]);
+
+        $this->assertDatabaseHas('verifications', [
+            'user_id' => $this->freelancer->id,
+            'status' => 'approved',
+        ]);
+    }
 }

@@ -432,6 +432,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/messages', [MessageController::class, 'store']);
     Route::put('/messages/{message}/read', [MessageController::class, 'markRead']);
     Route::put('/messages/{userId}/read-all', [MessageController::class, 'markAllRead']);
+    Route::post('/messages/call/signal', [MessageController::class, 'sendCallSignal']);
 });
 
 // Notifications

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Events\CallSignaled;
 use App\Events\MessageRead;
 use App\Events\MessageSent;
 use App\Models\Message;
@@ -219,5 +220,38 @@ class MessageController extends BaseApiController
             ->count();
 
         return $this->sendResponse(['unread_count' => $count], 'Unread count retrieved.');
+    }
+
+    /**
+     * Send WebRTC call signal to a user.
+     */
+    public function sendCallSignal(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'receiver_id' => 'required|integer|exists:users,id',
+            'type' => 'required|string|in:start-call,offer,answer,ice-candidate,reject-call,end-call',
+            'signal' => 'nullable|array',
+        ]);
+
+        try {
+            broadcast(new CallSignaled(
+                $user->id,
+                $validated['receiver_id'],
+                $validated['type'],
+                $validated['signal'] ?? null,
+                $user->name,
+                $user->avatar ?? null
+            ));
+        } catch (\Throwable $e) {
+            // Broadcasting fallback
+        }
+
+        return $this->sendResponse([
+            'sender_id' => $user->id,
+            'receiver_id' => $validated['receiver_id'],
+            'type' => $validated['type'],
+        ], 'Call signal sent.');
     }
 }

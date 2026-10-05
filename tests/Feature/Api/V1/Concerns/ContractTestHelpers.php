@@ -46,6 +46,14 @@ trait ContractTestHelpers
             'availability_status'=> 'available',
         ]);
 
+        \App\Models\Credential::create([
+            'user_id'            => $user->id,
+            'title'              => 'Verified Certificate',
+            'type'               => 'external_certificate',
+            'file_path'          => 'credentials/verified.pdf',
+            'status'             => 'approved',
+        ]);
+
         return $user;
     }
 
