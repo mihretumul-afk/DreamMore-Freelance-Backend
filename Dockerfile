@@ -1,25 +1,27 @@
-FROM php:8.2-cli
+FROM php:8.3-fpm
 
-# Install Linux dependencies and PHP PostgreSQL extensions
+# Install system dependencies and PHP extensions
 RUN apt-get update && apt-get install -y \
-    git \
-    unzip \
-    libpq-dev \
-    libzip-dev \
-    && docker-php-ext-install pdo pdo_pgsql zip
+    git curl libpng-dev libonig-dev libxml2-dev zip unzip nginx
+
+RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-WORKDIR /var/www/html
+WORKDIR /var/www
 
-# Copy application files
 COPY . .
 
-# Install Laravel dependencies
+# Install PHP dependencies
 RUN composer install --no-dev --optimize-autoloader
 
-EXPOSE 10000
+# Set permissions for Laravel storage
+RUN chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache
 
-# Start Laravel server
-CMD php artisan serve --host=0.0.0.0 --port=${PORT:-10000}
+# Nginx setup
+COPY .docker/nginx.conf /etc/nginx/sites-available/default
+
+EXPOSE 80
+
+CMD service nginx start && php-fpm
