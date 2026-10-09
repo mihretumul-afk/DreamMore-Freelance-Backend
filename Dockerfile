@@ -24,5 +24,5 @@ COPY .docker/nginx.conf /etc/nginx/sites-available/default
 
 EXPOSE 80
 
-# Run migrations automatically before starting Nginx and PHP
-CMD php artisan migrate --force && service nginx start && php-fpm
+# Run migrations, clear cache, start Nginx & PHP-FPM
+CMD ["sh", "-c", "php artisan config:cache && php artisan route:cache && php artisan migrate --force && service nginx start && php-fpm"]
