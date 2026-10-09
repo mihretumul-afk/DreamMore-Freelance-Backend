@@ -8,14 +8,16 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('job_skills', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('job_id')->constrained('marketplace_jobs')->cascadeOnDelete();
-            $table->foreignId('skill_id')->constrained()->cascadeOnDelete();
-            $table->timestamps();
+        if (!Schema::hasTable('job_skills')) {
+            Schema::create('job_skills', function (Blueprint $table) {
+                $table->id();
+                $table->foreignId('job_id')->constrained('marketplace_jobs')->cascadeOnDelete();
+                $table->foreignId('skill_id')->constrained()->cascadeOnDelete();
+                $table->timestamps();
 
-            $table->unique(['job_id', 'skill_id']);
-        });
+                $table->unique(['job_id', 'skill_id']);
+            });
+        }
     }
 
     public function down(): void
