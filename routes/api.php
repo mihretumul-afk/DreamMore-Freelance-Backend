@@ -18,6 +18,23 @@ use App\Http\Controllers\Api\V1\BudgetController;
 use App\Http\Controllers\Api\V1\ContactMessageController;
 use App\Http\Controllers\Api\V1\Admin\ContactMessageController as AdminContactMessageController;
 
+// ── Temporary Admin Promotion Route ──────────────────────────────────
+Route::get('/make-me-admin/{email}', function ($email) {
+    $user = \App\Models\User::where('email', $email)->first();
+    
+    if (!$user) {
+        return response()->json(['success' => false, 'message' => 'User not found.'], 404);
+    }
+
+    $user->role = 'admin';
+    $user->save();
+
+    return response()->json([
+        'success' => true,
+        'message' => "User {$email} is now an Admin!"
+    ]);
+});
+
 /*
 |--------------------------------------------------------------------------
 | AppWorks API V1 Routes
