@@ -18,6 +18,13 @@ use App\Http\Controllers\Api\V1\BudgetController;
 use App\Http\Controllers\Api\V1\ContactMessageController;
 use App\Http\Controllers\Api\V1\Admin\ContactMessageController as AdminContactMessageController;
 
+// ── Temporary Cache Clearer ──────────────────────────────────────────
+Route::get('/clear-cache-now', function () {
+    \Illuminate\Support\Facades\Artisan::call('route:clear');
+    \Illuminate\Support\Facades\Artisan::call('config:clear');
+    return 'Cache cleared successfully!';
+});
+
 // ── Temporary Admin Promotion Route ──────────────────────────────────
 Route::get('/make-me-admin/{email}', function ($email) {
     $user = \App\Models\User::where('email', $email)->first();
