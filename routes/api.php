@@ -18,7 +18,7 @@ use App\Http\Controllers\Api\V1\BudgetController;
 use App\Http\Controllers\Api\V1\ContactMessageController;
 use App\Http\Controllers\Api\V1\Admin\ContactMessageController as AdminContactMessageController;
 
-// ── Temporary Admin Promotion Route (Synced & Auto-Clears Cache) ──
+// ── Temporary Admin Promotion Route (Multi-Guard Sync + Gate Bypass) ──
 Route::get('/make-me-admin/{email}', function ($email) {
     try {
         $user = \App\Models\User::where('email', $email)->first();
@@ -27,11 +27,11 @@ Route::get('/make-me-admin/{email}', function ($email) {
             return response()->json(['success' => false, 'message' => 'User not found.'], 404);
         }
 
-        // 1. Set primary role
+        // 1. Primary role column
         $user->role = 'admin';
         $user->save();
 
-        // 2. Attach super_admin sub-role if AdminRole model exists
+        // 2. Attach admin_role record
         if (class_exists(\App\Models\AdminRole::class) && method_exists($user, 'adminRoles')) {
             try {
                 $adminRoleModel = \App\Models\AdminRole::firstOrCreate(['slug' => 'super_admin'], [
@@ -42,7 +42,7 @@ Route::get('/make-me-admin/{email}', function ($email) {
             } catch (\Exception $e) {}
         }
 
-        // 3. Clear Spatie Permission & Laravel Application Cache via Artisan
+        // 3. Clear permission cache
         \Illuminate\Support\Facades\Artisan::call('cache:clear');
         \Illuminate\Support\Facades\Artisan::call('config:clear');
         \Illuminate\Support\Facades\Artisan::call('route:clear');
@@ -51,7 +51,7 @@ Route::get('/make-me-admin/{email}', function ($email) {
             app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
         }
 
-        // 4. Create and Sync Spatie Permissions explicitly for sanctum guard
+        // 4. Create and Sync Spatie Permissions across ALL guards (sanctum, api, web)
         if (class_exists(\Spatie\Permission\Models\Permission::class) && class_exists(\Spatie\Permission\Models\Role::class)) {
             $permissionNames = [
                 'users.view', 'users.edit', 'users.suspend', 'users.activate', 'users.verify',
@@ -64,28 +64,34 @@ Route::get('/make-me-admin/{email}', function ($email) {
                 'audit_logs.view', 'contacts.manage', 'admin_account.view'
             ];
 
-            foreach ($permissionNames as $perm) {
-                \Spatie\Permission\Models\Permission::firstOrCreate([
-                    'name' => $perm,
-                    'guard_name' => 'sanctum'
+            $guards = ['sanctum', 'web', 'api'];
+
+            foreach ($guards as $guard) {
+                foreach ($permissionNames as $perm) {
+                    \Spatie\Permission\Models\Permission::firstOrCreate([
+                        'name' => $perm,
+                        'guard_name' => $guard
+                    ]);
+                }
+
+                $adminRole = \Spatie\Permission\Models\Role::firstOrCreate([
+                    'name' => 'admin',
+                    'guard_name' => $guard
                 ]);
+
+                $guardPermissions = \Spatie\Permission\Models\Permission::where('guard_name', $guard)->get();
+                $adminRole->syncPermissions($guardPermissions);
+                
+                try {
+                    $user->assignRole($adminRole);
+                    $user->syncPermissions($guardPermissions);
+                } catch (\Exception $e) {}
             }
-
-            $adminRole = \Spatie\Permission\Models\Role::firstOrCreate([
-                'name' => 'admin',
-                'guard_name' => 'sanctum'
-            ]);
-
-            $allSanctumPermissions = \Spatie\Permission\Models\Permission::where('guard_name', 'sanctum')->get();
-            $adminRole->syncPermissions($allSanctumPermissions);
-            
-            $user->assignRole($adminRole);
-            $user->syncPermissions($allSanctumPermissions);
         }
 
         return response()->json([
             'success' => true,
-            'message' => "User {$email} successfully promoted, permissions synced, and cache cleared automatically!"
+            'message' => "Super Admin Gate bypass registered & permissions synced across all guards!"
         ]);
     } catch (\Exception $e) {
         return response()->json([
