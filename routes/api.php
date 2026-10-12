@@ -18,7 +18,7 @@ use App\Http\Controllers\Api\V1\BudgetController;
 use App\Http\Controllers\Api\V1\ContactMessageController;
 use App\Http\Controllers\Api\V1\Admin\ContactMessageController as AdminContactMessageController;
 
-// ── Temporary Admin Promotion Route (Fully Synced with Sanctum Guard) ──
+// ── Temporary Admin Promotion Route (Synced & Auto-Clears Cache) ──
 Route::get('/make-me-admin/{email}', function ($email) {
     try {
         $user = \App\Models\User::where('email', $email)->first();
@@ -42,7 +42,11 @@ Route::get('/make-me-admin/{email}', function ($email) {
             } catch (\Exception $e) {}
         }
 
-        // 3. Clear Spatie Permission Cache
+        // 3. Clear Spatie Permission & Laravel Application Cache via Artisan
+        \Illuminate\Support\Facades\Artisan::call('cache:clear');
+        \Illuminate\Support\Facades\Artisan::call('config:clear');
+        \Illuminate\Support\Facades\Artisan::call('route:clear');
+
         if (class_exists(\Spatie\Permission\PermissionRegistrar::class)) {
             app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
         }
@@ -60,7 +64,6 @@ Route::get('/make-me-admin/{email}', function ($email) {
                 'audit_logs.view', 'contacts.manage', 'admin_account.view'
             ];
 
-            // Create permissions for sanctum guard
             foreach ($permissionNames as $perm) {
                 \Spatie\Permission\Models\Permission::firstOrCreate([
                     'name' => $perm,
@@ -68,7 +71,6 @@ Route::get('/make-me-admin/{email}', function ($email) {
                 ]);
             }
 
-            // Create admin role for sanctum guard and assign permissions
             $adminRole = \Spatie\Permission\Models\Role::firstOrCreate([
                 'name' => 'admin',
                 'guard_name' => 'sanctum'
@@ -77,14 +79,13 @@ Route::get('/make-me-admin/{email}', function ($email) {
             $allSanctumPermissions = \Spatie\Permission\Models\Permission::where('guard_name', 'sanctum')->get();
             $adminRole->syncPermissions($allSanctumPermissions);
             
-            // Assign role and sync permissions directly to user
             $user->assignRole($adminRole);
             $user->syncPermissions($allSanctumPermissions);
         }
 
         return response()->json([
             'success' => true,
-            'message' => "User {$email} successfully granted all Sanctum Spatie permissions!"
+            'message' => "User {$email} successfully promoted, permissions synced, and cache cleared automatically!"
         ]);
     } catch (\Exception $e) {
         return response()->json([
@@ -94,7 +95,6 @@ Route::get('/make-me-admin/{email}', function ($email) {
         ], 500);
     }
 });
-
 /*
 |--------------------------------------------------------------------------
 | AppWorks API V1 Routes
