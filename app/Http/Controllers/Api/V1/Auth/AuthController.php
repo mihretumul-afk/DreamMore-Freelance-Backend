@@ -46,8 +46,17 @@ class AuthController extends BaseApiController
             $request->input('password')
         );
 
+        $user = $result['user'];
+        $userData = (new UserResource($user))->resolve($request);
+
+        // Ensure roles and permissions are attached to the login response for immediate sidebar rendering
+        $userData['roles'] = method_exists($user, 'getRoleNames') ? $user->getRoleNames() : [$user->role];
+        $userData['permissions'] = method_exists($user, 'getAllPermissions') 
+            ? $user->getAllPermissions()->pluck('name')->values() 
+            : [];
+
         return $this->sendResponse([
-            'user'  => new UserResource($result['user']),
+            'user'  => $userData,
             'token' => $result['token'],
         ], 'User authenticated successfully.');
     }
@@ -59,17 +68,19 @@ class AuthController extends BaseApiController
     {
         $user = $request->user();
         $relations = ['freelancerProfile', 'employerProfile'];
-
-        // For admin users, load RBAC data so the frontend can render
-        // permission-gated UI without an extra API call.
-        if ($user->isAdmin()) {
-            $relations[] = 'adminRoles.permissions';
-        }
-
         $user->load($relations);
 
+        // Convert user resource and inject flat Spatie permission array for frontend sidebar routing
+        $userData = (new UserResource($user))->resolve($request);
+
+        // Explicitly attach flat roles and permission string arrays
+        $userData['roles'] = method_exists($user, 'getRoleNames') ? $user->getRoleNames() : [$user->role];
+        $userData['permissions'] = method_exists($user, 'getAllPermissions') 
+            ? $user->getAllPermissions()->pluck('name')->values() 
+            : [];
+
         return $this->sendResponse(
-            new UserResource($user),
+            $userData,
             'User profile retrieved successfully.'
         );
     }
