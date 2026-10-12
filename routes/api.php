@@ -25,7 +25,7 @@ Route::get('/clear-cache-now', function () {
     return 'Cache cleared successfully!';
 });
 
-// ── Temporary Admin Promotion Route (Updated to Seed & Sync ALL Permissions) ──
+// ── Temporary Admin Promotion Route (Synced with admin_roles & Spatie) ──
 Route::get('/make-me-admin/{email}', function ($email) {
     $user = \App\Models\User::where('email', $email)->first();
     
@@ -37,7 +37,16 @@ Route::get('/make-me-admin/{email}', function ($email) {
     $user->role = 'admin';
     $user->save();
 
-    // Assign Spatie admin role
+    // Attach the super_admin admin_role record so frontend detects it in getAdminSubRole()
+    if (method_exists($user, 'adminRoles')) {
+        $adminRoleModel = \App\Models\AdminRole::firstOrCreate(['slug' => 'super_admin'], [
+            'name' => 'Super Admin',
+            'description' => 'Full system access'
+        ]);
+        $user->adminRoles()->sync([$adminRoleModel->id]);
+    }
+
+    // Assign Spatie admin role & sync all permissions
     if (class_exists(\Spatie\Permission\Models\Role::class)) {
         try {
             $adminRole = \Spatie\Permission\Models\Role::firstOrCreate([
@@ -48,7 +57,6 @@ Route::get('/make-me-admin/{email}', function ($email) {
         } catch (\Exception $e) {}
     }
 
-    // Create and sync all possible admin permissions to reveal all sidebar modules
     if (class_exists(\Spatie\Permission\Models\Permission::class)) {
         try {
             $permissionNames = [
@@ -75,7 +83,7 @@ Route::get('/make-me-admin/{email}', function ($email) {
 
     return response()->json([
         'success' => true,
-        'message' => "User {$email} is now a Full Super Admin with all Spatie permissions synchronized!"
+        'message' => "User {$email} is now fully promoted with super_admin admin_roles and Spatie permissions synchronized!"
     ]);
 });
 
