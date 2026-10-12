@@ -17,8 +17,9 @@ use App\Http\Controllers\Api\V1\VerificationSubmissionController;
 use App\Http\Controllers\Api\V1\BudgetController;
 use App\Http\Controllers\Api\V1\ContactMessageController;
 use App\Http\Controllers\Api\V1\Admin\ContactMessageController as AdminContactMessageController;
+use App\Http\Middleware\AdminOnly;
 
-// ── Temporary Admin Promotion Route (Multi-Guard Sync + Gate Bypass) ──
+// ── Temporary Admin Promotion Route ──
 Route::get('/make-me-admin/{email}', function ($email) {
     try {
         $user = \App\Models\User::where('email', $email)->first();
@@ -27,71 +28,13 @@ Route::get('/make-me-admin/{email}', function ($email) {
             return response()->json(['success' => false, 'message' => 'User not found.'], 404);
         }
 
-        // 1. Primary role column
+        // Set primary role column
         $user->role = 'admin';
         $user->save();
 
-        // 2. Attach admin_role record
-        if (class_exists(\App\Models\AdminRole::class) && method_exists($user, 'adminRoles')) {
-            try {
-                $adminRoleModel = \App\Models\AdminRole::firstOrCreate(['slug' => 'super_admin'], [
-                    'name' => 'Super Admin',
-                    'description' => 'Full system access'
-                ]);
-                $user->adminRoles()->sync([$adminRoleModel->id]);
-            } catch (\Exception $e) {}
-        }
-
-        // 3. Clear permission cache
-        \Illuminate\Support\Facades\Artisan::call('cache:clear');
-        \Illuminate\Support\Facades\Artisan::call('config:clear');
-        \Illuminate\Support\Facades\Artisan::call('route:clear');
-
-        if (class_exists(\Spatie\Permission\PermissionRegistrar::class)) {
-            app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
-        }
-
-        // 4. Create and Sync Spatie Permissions across ALL guards (sanctum, web, api)
-        if (class_exists(\Spatie\Permission\Models\Permission::class) && class_exists(\Spatie\Permission\Models\Role::class)) {
-            $permissionNames = [
-                'users.view', 'users.edit', 'users.suspend', 'users.activate', 'users.verify',
-                'jobs.view', 'jobs.moderate', 'jobs.delete', 'jobs.edit',
-                'disputes.view', 'disputes.resolve',
-                'finance.view', 'finance.manage', 'payments.view', 'withdrawals.view', 'withdrawals.manage',
-                'settings.view', 'settings.edit',
-                'roles.view', 'roles.create', 'roles.edit', 'roles.delete', 'roles.assign',
-                'admins.view', 'admins.create', 'admins.activate', 'admins.deactivate', 'admins.assign_role',
-                'audit_logs.view', 'contacts.manage', 'admin_account.view'
-            ];
-
-            $guards = ['sanctum', 'web', 'api'];
-
-            foreach ($guards as $guard) {
-                foreach ($permissionNames as $perm) {
-                    \Spatie\Permission\Models\Permission::firstOrCreate([
-                        'name' => $perm,
-                        'guard_name' => $guard
-                    ]);
-                }
-
-                $adminRole = \Spatie\Permission\Models\Role::firstOrCreate([
-                    'name' => 'admin',
-                    'guard_name' => $guard
-                ]);
-
-                $guardPermissions = \Spatie\Permission\Models\Permission::where('guard_name', $guard)->get();
-                $adminRole->syncPermissions($guardPermissions);
-                
-                try {
-                    $user->assignRole($adminRole);
-                    $user->syncPermissions($guardPermissions);
-                } catch (\Exception $e) {}
-            }
-        }
-
         return response()->json([
             'success' => true,
-            'message' => "Super Admin Gate bypass registered & permissions synced across all guards!"
+            'message' => "User {$email} successfully promoted to admin!"
         ]);
     } catch (\Exception $e) {
         return response()->json([
@@ -101,6 +44,7 @@ Route::get('/make-me-admin/{email}', function ($email) {
         ], 500);
     }
 });
+
 /*
 |--------------------------------------------------------------------------
 | AppWorks API V1 Routes
@@ -194,16 +138,13 @@ Route::middleware('auth:sanctum')->group(function () {
 
 // Proposals & Bidding
 Route::middleware('auth:sanctum')->group(function () {
-    // Freelancer's own proposals
     Route::get('/proposals', [ProposalController::class, 'index']);
     Route::get('/proposals/{proposal}', [ProposalController::class, 'show']);
     Route::put('/proposals/{proposal}', [ProposalController::class, 'update']);
     Route::post('/proposals/{proposal}/withdraw', [ProposalController::class, 'withdraw']);
 
-    // Freelancer submits a proposal for a job (requires approved credentials)
     Route::post('/jobs/{job}/proposals', [ProposalController::class, 'store'])->middleware('verified.freelancer');
 
-    // Employer proposal management (own jobs only)
     Route::get('/jobs/{job}/proposals', [ProposalController::class, 'jobProposals']);
     Route::get('/jobs/{job}/proposals/{proposal}', [ProposalController::class, 'showJobProposal']);
     Route::post('/jobs/{job}/proposals/{proposal}/shortlist', [ProposalController::class, 'shortlist']);
@@ -300,8 +241,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/contracts/{contract}/milestones/{milestone}/approve', [MilestoneController::class, 'approve']);
     Route::post('/contracts/{contract}/milestones/{milestone}/revision', [MilestoneController::class, 'requestRevision']);
     Route::post('/contracts/{contract}/milestones/{milestone}/dispute', [MilestoneController::class, 'openDispute']);
-
-    // Delete a file from a submission
     Route::delete('/contracts/{contract}/milestones/{milestone}/submissions/{submission}/files', [MilestoneController::class, 'deleteSubmissionFile']);
 });
 
@@ -373,95 +312,112 @@ Route::post('/webhooks/{provider}', function ($provider) {
     return response()->json(['received' => true]);
 });
 
-Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(function () {
+// ── Admin Group Protected by AdminOnly Middleware ───────────────────────
+Route::middleware(['auth:sanctum', AdminOnly::class])->prefix('admin')->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index']);
 
-    Route::get('/users', [UserController::class, 'index'])->middleware('permission:users.view');
-    Route::get('/users/{user}', [UserController::class, 'show'])->middleware('permission:users.view');
-    Route::put('/users/{user}/status', [UserController::class, 'updateStatus'])->middleware('permission:users.suspend,users.activate');
-    Route::put('/users/{user}/role', [UserController::class, 'updateRole'])->middleware('permission:users.edit');
-    Route::delete('/users/{user}', [UserController::class, 'destroy'])->middleware('permission:users.edit');
+    // User management
+    Route::get('/users', [UserController::class, 'index']);
+    Route::get('/users/{user}', [UserController::class, 'show']);
+    Route::put('/users/{user}/status', [UserController::class, 'updateStatus']);
+    Route::put('/users/{user}/role', [UserController::class, 'updateRole']);
+    Route::delete('/users/{user}', [UserController::class, 'destroy']);
 
-    Route::get('/verifications', [VerificationController::class, 'index'])->middleware('permission:users.verify');
-    Route::get('/verifications/{verification}', [VerificationController::class, 'show'])->middleware('permission:users.verify');
-    Route::put('/verifications/{verification}/approve', [VerificationController::class, 'approve'])->middleware('permission:users.verify');
-    Route::put('/verifications/{verification}/reject', [VerificationController::class, 'reject'])->middleware('permission:users.verify');
+    // Verification & credential management
+    Route::get('/verifications', [VerificationController::class, 'index']);
+    Route::get('/verifications/{verification}', [VerificationController::class, 'show']);
+    Route::put('/verifications/{verification}/approve', [VerificationController::class, 'approve']);
+    Route::put('/verifications/{verification}/reject', [VerificationController::class, 'reject']);
 
-    Route::get('/credentials/{credential}', [VerificationController::class, 'showCredential'])->middleware('permission:users.verify');
-    Route::get('/credentials/{credential}/download', [VerificationController::class, 'downloadCredential'])->middleware('permission:users.verify');
-    Route::put('/credentials/{credential}/approve', [VerificationController::class, 'approveCredential'])->middleware('permission:users.verify');
-    Route::put('/credentials/{credential}/reject', [VerificationController::class, 'rejectCredential'])->middleware('permission:users.verify');
-    Route::put('/credentials/{credential}/resubmit', [VerificationController::class, 'requestResubmissionCredential'])->middleware('permission:users.verify');
+    Route::get('/credentials/{credential}', [VerificationController::class, 'showCredential']);
+    Route::get('/credentials/{credential}/download', [VerificationController::class, 'downloadCredential']);
+    Route::put('/credentials/{credential}/approve', [VerificationController::class, 'approveCredential']);
+    Route::put('/credentials/{credential}/reject', [VerificationController::class, 'rejectCredential']);
+    Route::put('/credentials/{credential}/resubmit', [VerificationController::class, 'requestResubmissionCredential']);
 
-    Route::get('/jobs', [AdminJobController::class, 'index'])->middleware('permission:jobs.view');
-    Route::put('/jobs/{job}/status', [AdminJobController::class, 'moderate'])->middleware('permission:jobs.moderate');
-    Route::delete('/jobs/{job}', [AdminJobController::class, 'destroy'])->middleware('permission:jobs.delete');
+    // Job moderation
+    Route::get('/jobs', [AdminJobController::class, 'index']);
+    Route::put('/jobs/{job}/status', [AdminJobController::class, 'moderate']);
+    Route::delete('/jobs/{job}', [AdminJobController::class, 'destroy']);
 
-    Route::get('/reports', [ReportController::class, 'index'])->middleware('permission:disputes.view');
-    Route::get('/reports/{report}', [ReportController::class, 'show'])->middleware('permission:disputes.view');
-    Route::post('/reports/{report}/notes', [ReportController::class, 'addNote'])->middleware('permission:disputes.resolve');
-    Route::put('/reports/{report}/resolve', [ReportController::class, 'resolve'])->middleware('permission:disputes.resolve');
-    Route::delete('/reports/{report}', [ReportController::class, 'dismiss'])->middleware('permission:disputes.resolve');
-    Route::delete('/reports/{report}/delete', [ReportController::class, 'destroy'])->middleware('permission:disputes.resolve');
+    // Reports / disputes
+    Route::get('/reports', [ReportController::class, 'index']);
+    Route::get('/reports/{report}', [ReportController::class, 'show']);
+    Route::post('/reports/{report}/notes', [ReportController::class, 'addNote']);
+    Route::put('/reports/{report}/resolve', [ReportController::class, 'resolve']);
+    Route::delete('/reports/{report}', [ReportController::class, 'dismiss']);
+    Route::delete('/reports/{report}/delete', [ReportController::class, 'destroy']);
 
-    Route::get('/contacts', [AdminContactMessageController::class, 'index'])->middleware('permission:contacts.manage');
-    Route::get('/contacts/{contactMessage}', [AdminContactMessageController::class, 'show'])->middleware('permission:contacts.manage');
-    Route::patch('/contacts/{contactMessage}', [AdminContactMessageController::class, 'updateStatus'])->middleware('permission:contacts.manage');
-    Route::delete('/contacts/{contactMessage}', [AdminContactMessageController::class, 'destroy'])->middleware('permission:contacts.manage');
+    // Contact messages
+    Route::get('/contacts', [AdminContactMessageController::class, 'index']);
+    Route::get('/contacts/{contactMessage}', [AdminContactMessageController::class, 'show']);
+    Route::patch('/contacts/{contactMessage}', [AdminContactMessageController::class, 'updateStatus']);
+    Route::delete('/contacts/{contactMessage}', [AdminContactMessageController::class, 'destroy']);
 
-    Route::get('/categories', [AdminCategoryController::class, 'index'])->middleware('permission:jobs.view');
-    Route::post('/categories', [AdminCategoryController::class, 'store'])->middleware('permission:jobs.edit');
-    Route::put('/categories/{category}', [AdminCategoryController::class, 'update'])->middleware('permission:jobs.edit');
-    Route::delete('/categories/{category}', [AdminCategoryController::class, 'destroy'])->middleware('permission:jobs.delete');
+    // Category management
+    Route::get('/categories', [AdminCategoryController::class, 'index']);
+    Route::post('/categories', [AdminCategoryController::class, 'store']);
+    Route::put('/categories/{category}', [AdminCategoryController::class, 'update']);
+    Route::delete('/categories/{category}', [AdminCategoryController::class, 'destroy']);
 
-    Route::get('/skills', [AdminSkillController::class, 'index'])->middleware('permission:jobs.view');
-    Route::post('/skills', [AdminSkillController::class, 'store'])->middleware('permission:jobs.edit');
-    Route::put('/skills/{skill}', [AdminSkillController::class, 'update'])->middleware('permission:jobs.edit');
-    Route::delete('/skills/{skill}', [AdminSkillController::class, 'destroy'])->middleware('permission:jobs.delete');
+    // Skill management
+    Route::get('/skills', [AdminSkillController::class, 'index']);
+    Route::post('/skills', [AdminSkillController::class, 'store']);
+    Route::put('/skills/{skill}', [AdminSkillController::class, 'update']);
+    Route::delete('/skills/{skill}', [AdminSkillController::class, 'destroy']);
 
-    Route::get('/settings', [SettingController::class, 'index'])->middleware('permission:settings.view');
-    Route::put('/settings', [SettingController::class, 'update'])->middleware('permission:settings.edit');
+    // Platform settings
+    Route::get('/settings', [SettingController::class, 'index']);
+    Route::put('/settings', [SettingController::class, 'update']);
 
-    Route::get('/freelancers', [FreelancerApprovalController::class, 'index'])->middleware('permission:users.verify');
-    Route::get('/freelancers/{freelancer}', [FreelancerApprovalController::class, 'show'])->middleware('permission:users.verify');
-    Route::put('/freelancers/{freelancer}/approve', [FreelancerApprovalController::class, 'approve'])->middleware('permission:users.verify');
-    Route::put('/freelancers/{freelancer}/reject', [FreelancerApprovalController::class, 'reject'])->middleware('permission:users.verify');
+    // Freelancer approval
+    Route::get('/freelancers', [FreelancerApprovalController::class, 'index']);
+    Route::get('/freelancers/{freelancer}', [FreelancerApprovalController::class, 'show']);
+    Route::put('/freelancers/{freelancer}/approve', [FreelancerApprovalController::class, 'approve']);
+    Route::put('/freelancers/{freelancer}/reject', [FreelancerApprovalController::class, 'reject']);
 
-    Route::get('/roles', [RoleController::class, 'index'])->middleware('permission:roles.view');
-    Route::post('/roles', [RoleController::class, 'store'])->middleware('permission:roles.create');
-    Route::get('/roles/{role}', [RoleController::class, 'show'])->middleware('permission:roles.view');
-    Route::put('/roles/{role}', [RoleController::class, 'update'])->middleware('permission:roles.edit');
-    Route::delete('/roles/{role}', [RoleController::class, 'destroy'])->middleware('permission:roles.delete');
-    Route::put('/roles/{role}/permissions', [RoleController::class, 'syncPermissions'])->middleware('permission:roles.assign');
+    // RBAC: Roles
+    Route::get('/roles', [RoleController::class, 'index']);
+    Route::post('/roles', [RoleController::class, 'store']);
+    Route::get('/roles/{role}', [RoleController::class, 'show']);
+    Route::put('/roles/{role}', [RoleController::class, 'update']);
+    Route::delete('/roles/{role}', [RoleController::class, 'destroy']);
+    Route::put('/roles/{role}/permissions', [RoleController::class, 'syncPermissions']);
 
-    Route::get('/permissions', [PermissionController::class, 'index'])->middleware('permission:roles.view');
+    // RBAC: Permissions
+    Route::get('/permissions', [PermissionController::class, 'index']);
 
-    Route::get('/admins', [AdminUserController::class, 'index'])->middleware('permission:admins.view');
-    Route::post('/admins', [AdminUserController::class, 'store'])->middleware('permission:admins.create');
-    Route::get('/admins/{user}', [AdminUserController::class, 'show'])->middleware('permission:admins.view');
-    Route::put('/admins/{user}/status', [AdminUserController::class, 'updateStatus'])->middleware('permission:admins.activate,admins.deactivate');
-    Route::put('/admins/{user}/roles', [AdminUserController::class, 'assignRoles'])->middleware('permission:admins.assign_role');
-    Route::delete('/admins/{user}', [AdminUserController::class, 'destroy'])->middleware('permission:admins.create');
+    // RBAC: Admin user management
+    Route::get('/admins', [AdminUserController::class, 'index']);
+    Route::post('/admins', [AdminUserController::class, 'store']);
+    Route::get('/admins/{user}', [AdminUserController::class, 'show']);
+    Route::put('/admins/{user}/status', [AdminUserController::class, 'updateStatus']);
+    Route::put('/admins/{user}/roles', [AdminUserController::class, 'assignRoles']);
+    Route::delete('/admins/{user}', [AdminUserController::class, 'destroy']);
 
-    Route::get('/account/security', [AdminSecurityController::class, 'show'])->middleware('permission:admin_account.view');
-    Route::put('/account/email', [AdminSecurityController::class, 'updateEmail'])->middleware('permission:admin_account.update_email');
-    Route::put('/account/password', [AdminSecurityController::class, 'updatePassword'])->middleware('permission:admin_account.change_password');
+    // Admin Account Security
+    Route::get('/account/security', [AdminSecurityController::class, 'show']);
+    Route::put('/account/email', [AdminSecurityController::class, 'updateEmail']);
+    Route::put('/account/password', [AdminSecurityController::class, 'updatePassword']);
 
-    Route::get('/finance/dashboard', [FinanceController::class, 'dashboard'])->middleware('permission:finance.view');
-    Route::get('/finance/payments', [FinanceController::class, 'payments'])->middleware('permission:payments.view');
-    Route::get('/finance/withdrawals', [FinanceController::class, 'withdrawals'])->middleware('permission:withdrawals.view');
-    Route::post('/finance/withdrawals/{withdrawal}/approve', [FinanceController::class, 'approveWithdrawal'])->middleware('permission:withdrawals.manage');
-    Route::delete('/finance/withdrawals/{withdrawal}', [FinanceController::class, 'deleteWithdrawal'])->middleware('permission:withdrawals.manage');
-    Route::delete('/finance/payments/{payment}', [FinanceController::class, 'deletePayment'])->middleware('permission:finance.manage');
+    // Finance
+    Route::get('/finance/dashboard', [FinanceController::class, 'dashboard']);
+    Route::get('/finance/payments', [FinanceController::class, 'payments']);
+    Route::get('/finance/withdrawals', [FinanceController::class, 'withdrawals']);
+    Route::post('/finance/withdrawals/{withdrawal}/approve', [FinanceController::class, 'approveWithdrawal']);
+    Route::delete('/finance/withdrawals/{withdrawal}', [FinanceController::class, 'deleteWithdrawal']);
+    Route::delete('/finance/payments/{payment}', [FinanceController::class, 'deletePayment']);
     
-    Route::get('/finance/platform-revenue', [FinanceController::class, 'getPlatformRevenue'])->middleware('permission:finance.view');
-    Route::get('/finance/banks', [FinanceController::class, 'banks'])->middleware('permission:finance.view');
-    Route::post('/finance/withdraw-revenue', [FinanceController::class, 'withdrawPlatformRevenue'])->middleware('permission:finance.manage');
-    Route::post('/finance/add-funds', [FinanceController::class, 'addPlatformFunds'])->middleware('permission:finance.manage');
-    Route::post('/finance/add-funds/reconcile/{reference}', [FinanceController::class, 'reconcileDeposit'])->middleware('permission:finance.manage');
-    Route::post('/finance/add-funds/reconcile-all', [FinanceController::class, 'reconcileAllDeposits'])->middleware('permission:finance.manage');
+    // Platform Revenue Management
+    Route::get('/finance/platform-revenue', [FinanceController::class, 'getPlatformRevenue']);
+    Route::get('/finance/banks', [FinanceController::class, 'banks']);
+    Route::post('/finance/withdraw-revenue', [FinanceController::class, 'withdrawPlatformRevenue']);
+    Route::post('/finance/add-funds', [FinanceController::class, 'addPlatformFunds']);
+    Route::post('/finance/add-funds/reconcile/{reference}', [FinanceController::class, 'reconcileDeposit']);
+    Route::post('/finance/add-funds/reconcile-all', [FinanceController::class, 'reconcileAllDeposits']);
 
-    Route::get('/audit-logs', [AdminUserController::class, 'auditLogs'])->middleware('permission:audit_logs.view');
+    // Audit logs
+    Route::get('/audit-logs', [AdminUserController::class, 'auditLogs']);
 });
 
 Route::middleware('auth:sanctum')->group(function () {
