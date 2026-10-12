@@ -51,7 +51,7 @@ Route::get('/make-me-admin/{email}', function ($email) {
             app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
         }
 
-        // 4. Create and Sync Spatie Permissions across ALL guards (sanctum, api, web)
+        // 4. Create and Sync Spatie Permissions across ALL guards (sanctum, web, api)
         if (class_exists(\Spatie\Permission\Models\Permission::class) && class_exists(\Spatie\Permission\Models\Role::class)) {
             $permissionNames = [
                 'users.view', 'users.edit', 'users.suspend', 'users.activate', 'users.verify',
