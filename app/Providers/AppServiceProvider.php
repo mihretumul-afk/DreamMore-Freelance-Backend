@@ -8,6 +8,7 @@ use App\Services\Payment\Providers\SandboxProvider;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Facades\Gate;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -44,5 +45,13 @@ class AppServiceProvider extends ServiceProvider
         if (config('app.env') === 'production' || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')) {
             URL::forceScheme('https');
         }
+
+        // ── Global Super Admin Permission Bypass ──────────────────────────────
+        // Automatically allows any admin user to pass all Spatie permission checks.
+        Gate::before(function ($user, $ability) {
+            if ($user->role === 'admin' || (method_exists($user, 'hasRole') && $user->hasRole('admin'))) {
+                return true;
+            }
+        });
     }
 }
