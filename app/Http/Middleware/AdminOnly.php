@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Illuminate\Support\Facades\Gate;
 
 class AdminOnly
 {
@@ -16,12 +17,18 @@ class AdminOnly
             return response()->json(['message' => 'Unauthenticated.'], 401);
         }
 
-        // Directly checks the database role column — no complex permission tables needed!
         if ($user->role !== 'admin') {
             return response()->json([
                 'message' => 'Forbidden. Requires admin privileges.'
             ], 403);
         }
+
+        // Force Laravel Gate to allow ANY ability check if the user is an admin!
+        Gate::before(function ($user, $ability) {
+            if ($user->role === 'admin') {
+                return true;
+            }
+        });
 
         return $next($request);
     }
