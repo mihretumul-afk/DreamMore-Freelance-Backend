@@ -18,47 +18,41 @@ use App\Http\Controllers\Api\V1\BudgetController;
 use App\Http\Controllers\Api\V1\ContactMessageController;
 use App\Http\Controllers\Api\V1\Admin\ContactMessageController as AdminContactMessageController;
 
-// ── Temporary Cache Clearer ──────────────────────────────────────────
-Route::get('/clear-cache-now', function () {
-    \Illuminate\Support\Facades\Artisan::call('route:clear');
-    \Illuminate\Support\Facades\Artisan::call('config:clear');
-    return 'Cache cleared successfully!';
-});
-
-// ── Temporary Admin Promotion Route (Synced with admin_roles & Spatie) ──
+// ── Temporary Admin Promotion Route (Safe & Error-Catching) ──
 Route::get('/make-me-admin/{email}', function ($email) {
-    $user = \App\Models\User::where('email', $email)->first();
-    
-    if (!$user) {
-        return response()->json(['success' => false, 'message' => 'User not found.'], 404);
-    }
+    try {
+        $user = \App\Models\User::where('email', $email)->first();
+        
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'User not found.'], 404);
+        }
 
-    // Set primary role column
-    $user->role = 'admin';
-    $user->save();
+        // Set primary role column
+        $user->role = 'admin';
+        $user->save();
 
-    // Attach the super_admin admin_role record so frontend detects it in getAdminSubRole()
-    if (method_exists($user, 'adminRoles')) {
-        $adminRoleModel = \App\Models\AdminRole::firstOrCreate(['slug' => 'super_admin'], [
-            'name' => 'Super Admin',
-            'description' => 'Full system access'
-        ]);
-        $user->adminRoles()->sync([$adminRoleModel->id]);
-    }
+        // Safely attach admin_role if the model exists
+        if (class_exists(\App\Models\AdminRole::class) && method_exists($user, 'adminRoles')) {
+            try {
+                $adminRoleModel = \App\Models\AdminRole::firstOrCreate(['slug' => 'super_admin'], [
+                    'name' => 'Super Admin',
+                    'description' => 'Full system access'
+                ]);
+                $user->adminRoles()->sync([$adminRoleModel->id]);
+            } catch (\Exception $e) {
+                // Ignore if admin_roles table doesn't exist
+            }
+        }
 
-    // Assign Spatie admin role & sync all permissions
-    if (class_exists(\Spatie\Permission\Models\Role::class)) {
-        try {
+        // Assign Spatie admin role & permissions using 'web' or default guard
+        if (class_exists(\Spatie\Permission\Models\Role::class)) {
             $adminRole = \Spatie\Permission\Models\Role::firstOrCreate([
-                'name' => 'admin',
-                'guard_name' => 'sanctum'
+                'name' => 'admin'
             ]);
             $user->assignRole($adminRole);
-        } catch (\Exception $e) {}
-    }
+        }
 
-    if (class_exists(\Spatie\Permission\Models\Permission::class)) {
-        try {
+        if (class_exists(\Spatie\Permission\Models\Permission::class)) {
             $permissionNames = [
                 'users.view', 'users.edit', 'users.suspend', 'users.activate', 'users.verify',
                 'jobs.view', 'jobs.moderate', 'jobs.delete', 'jobs.edit',
@@ -71,22 +65,25 @@ Route::get('/make-me-admin/{email}', function ($email) {
             ];
 
             foreach ($permissionNames as $perm) {
-                \Spatie\Permission\Models\Permission::firstOrCreate([
-                    'name' => $perm,
-                    'guard_name' => 'sanctum'
-                ]);
+                \Spatie\Permission\Models\Permission::firstOrCreate(['name' => $perm]);
             }
 
             $user->syncPermissions(\Spatie\Permission\Models\Permission::all());
-        } catch (\Exception $e) {}
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "User {$email} promoted successfully with all permissions synced!"
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'error' => $e->getMessage(),
+            'line' => $e->getLine(),
+            'file' => $e->getFile()
+        ], 500);
     }
-
-    return response()->json([
-        'success' => true,
-        'message' => "User {$email} is now fully promoted with super_admin admin_roles and Spatie permissions synchronized!"
-    ]);
 });
-
 /*
 |--------------------------------------------------------------------------
 | AppWorks API V1 Routes
