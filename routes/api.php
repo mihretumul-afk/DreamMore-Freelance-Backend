@@ -18,7 +18,7 @@ use App\Http\Controllers\Api\V1\BudgetController;
 use App\Http\Controllers\Api\V1\ContactMessageController;
 use App\Http\Controllers\Api\V1\Admin\ContactMessageController as AdminContactMessageController;
 
-// ── Temporary Admin Promotion Route ──
+// ── Temporary Admin Promotion Route (Fully Synced with Sanctum Guard) ──
 Route::get('/make-me-admin/{email}', function ($email) {
     try {
         $user = \App\Models\User::where('email', $email)->first();
@@ -27,17 +27,70 @@ Route::get('/make-me-admin/{email}', function ($email) {
             return response()->json(['success' => false, 'message' => 'User not found.'], 404);
         }
 
+        // 1. Set primary role
         $user->role = 'admin';
         $user->save();
 
+        // 2. Attach super_admin sub-role if AdminRole model exists
+        if (class_exists(\App\Models\AdminRole::class) && method_exists($user, 'adminRoles')) {
+            try {
+                $adminRoleModel = \App\Models\AdminRole::firstOrCreate(['slug' => 'super_admin'], [
+                    'name' => 'Super Admin',
+                    'description' => 'Full system access'
+                ]);
+                $user->adminRoles()->sync([$adminRoleModel->id]);
+            } catch (\Exception $e) {}
+        }
+
+        // 3. Clear Spatie Permission Cache
+        if (class_exists(\Spatie\Permission\PermissionRegistrar::class)) {
+            app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        }
+
+        // 4. Create and Sync Spatie Permissions explicitly for sanctum guard
+        if (class_exists(\Spatie\Permission\Models\Permission::class) && class_exists(\Spatie\Permission\Models\Role::class)) {
+            $permissionNames = [
+                'users.view', 'users.edit', 'users.suspend', 'users.activate', 'users.verify',
+                'jobs.view', 'jobs.moderate', 'jobs.delete', 'jobs.edit',
+                'disputes.view', 'disputes.resolve',
+                'finance.view', 'finance.manage', 'payments.view', 'withdrawals.view', 'withdrawals.manage',
+                'settings.view', 'settings.edit',
+                'roles.view', 'roles.create', 'roles.edit', 'roles.delete', 'roles.assign',
+                'admins.view', 'admins.create', 'admins.activate', 'admins.deactivate', 'admins.assign_role',
+                'audit_logs.view', 'contacts.manage', 'admin_account.view'
+            ];
+
+            // Create permissions for sanctum guard
+            foreach ($permissionNames as $perm) {
+                \Spatie\Permission\Models\Permission::firstOrCreate([
+                    'name' => $perm,
+                    'guard_name' => 'sanctum'
+                ]);
+            }
+
+            // Create admin role for sanctum guard and assign permissions
+            $adminRole = \Spatie\Permission\Models\Role::firstOrCreate([
+                'name' => 'admin',
+                'guard_name' => 'sanctum'
+            ]);
+
+            $allSanctumPermissions = \Spatie\Permission\Models\Permission::where('guard_name', 'sanctum')->get();
+            $adminRole->syncPermissions($allSanctumPermissions);
+            
+            // Assign role and sync permissions directly to user
+            $user->assignRole($adminRole);
+            $user->syncPermissions($allSanctumPermissions);
+        }
+
         return response()->json([
             'success' => true,
-            'message' => "User {$email} role updated to admin successfully!"
+            'message' => "User {$email} successfully granted all Sanctum Spatie permissions!"
         ]);
     } catch (\Exception $e) {
         return response()->json([
             'success' => false,
-            'error' => $e->getMessage()
+            'error' => $e->getMessage(),
+            'line' => $e->getLine()
         ], 500);
     }
 });
