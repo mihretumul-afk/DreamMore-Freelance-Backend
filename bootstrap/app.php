@@ -11,14 +11,19 @@ return Application::configure(basePath: dirname(__DIR__))
         api: __DIR__.'/../routes/api.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
-        apiPrefix: 'api/v1',
+        // Removed apiPrefix here to prevent double-prefixing your routes/api.php definitions
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Prepend CORS middleware to the API stack so preflight checks pass cleanly
+        $middleware->api(prepend: [
+            \Illuminate\Http\Middleware\HandleCors::class,
+        ]);
+
         $middleware->alias([
-            'role'               => \App\Http\Middleware\EnsureRole::class,
-            'permission'         => \App\Http\Middleware\CheckPermission::class,
+            'role'                 => \App\Http\Middleware\EnsureRole::class,
+            'permission'           => \App\Http\Middleware\CheckPermission::class,
             'verified.freelancer' => \App\Http\Middleware\EnsureVerifiedFreelancer::class,
-            'maintenance'        => \App\Http\Middleware\MaintenanceMode::class,
+            'maintenance'          => \App\Http\Middleware\MaintenanceMode::class,
         ]);
 
         // Lightweight online-presence tracking on all authenticated API
