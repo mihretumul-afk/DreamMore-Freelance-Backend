@@ -17,13 +17,48 @@ use App\Http\Controllers\Api\V1\VerificationSubmissionController;
 use App\Http\Controllers\Api\V1\BudgetController;
 use App\Http\Controllers\Api\V1\ContactMessageController;
 use App\Http\Controllers\Api\V1\Admin\ContactMessageController as AdminContactMessageController;
+use App\Http\Controllers\Api\V1\Admin\DashboardController;
+use App\Http\Controllers\Api\V1\Admin\UserController;
+use App\Http\Controllers\Api\V1\Admin\VerificationController;
+use App\Http\Controllers\Api\V1\Admin\JobController as AdminJobController;
+use App\Http\Controllers\Api\V1\Admin\ReportController;
+use App\Http\Controllers\Api\V1\Admin\CategoryController as AdminCategoryController;
+use App\Http\Controllers\Api\V1\Admin\SkillController as AdminSkillController;
+use App\Http\Controllers\Api\V1\Admin\SettingController;
+use App\Http\Controllers\Api\V1\Admin\FreelancerApprovalController;
+use App\Http\Controllers\Api\V1\Admin\RoleController;
+use App\Http\Controllers\Api\V1\Admin\PermissionController;
+use App\Http\Controllers\Api\V1\Admin\AdminUserController;
+use App\Http\Controllers\Api\V1\Admin\AdminSecurityController;
+use App\Http\Controllers\Api\V1\Admin\FinanceController;
+use App\Http\Controllers\Api\V1\AvatarController;
+use App\Http\Controllers\Api\V1\CredentialController;
+use App\Http\Controllers\Api\V1\MessageController;
+use App\Http\Controllers\Api\V1\NotificationController;
+use App\Http\Controllers\Api\V1\ReviewController;
+use App\Http\Controllers\Api\V1\SavedJobController;
+use App\Http\Controllers\Api\V1\SavedFreelancerController;
+use App\Http\Controllers\Api\V1\ContractController;
+use App\Http\Controllers\Api\V1\MilestoneController;
+use App\Http\Controllers\Api\V1\PaymentController;
+use App\Http\Controllers\Api\V1\PaymentMethodController;
+use App\Http\Controllers\Api\V1\WithdrawalController;
+use App\Http\Controllers\Api\V1\TransactionController;
+use App\Http\Controllers\Api\V1\RecommendationController;
+use App\Http\Controllers\Api\V1\DisputeController;
+use App\Http\Controllers\Api\V1\FeaturedController;
+use App\Http\Controllers\Api\V1\AddFundsController;
+use App\Http\Controllers\Api\V1\LmsWebhookController;
+use App\Http\Controllers\Api\V1\SkillTestController;
 use App\Http\Middleware\AdminOnly;
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Artisan;
 
 // ── Cache Clearing Helper Route ──
 Route::get('/clear-all-caches', function () {
-    \Illuminate\Support\Facades\Artisan::call('route:clear');
-    \Illuminate\Support\Facades\Artisan::call('config:clear');
-    \Illuminate\Support\Facades\Artisan::call('cache:clear');
+    Artisan::call('route:clear');
+    Artisan::call('config:clear');
+    Artisan::call('cache:clear');
     
     return response()->json([
         'success' => true,
@@ -58,7 +93,7 @@ Route::get('/make-me-admin/{email}', function ($email) {
 
 /*
 |--------------------------------------------------------------------------
-| AppWorks API V1 Routes (Explicit V1 Prefix Group)
+| AppWorks API V1 Routes
 |--------------------------------------------------------------------------
 */
 Route::prefix('v1')->group(function () {
@@ -67,18 +102,18 @@ Route::prefix('v1')->group(function () {
     Route::get('/health', [HealthController::class, 'health']);
     Route::get('/status', [HealthController::class, 'status']);
 
-    // Public platform settings (no auth required)
+    // Public platform settings
     Route::get('/platform-settings', [PlatformSettingsController::class, 'index']);
 
-    // Public Contact form (footer Contact button → /contact). Rate-limited.
+    // Public Contact form
     Route::post('/contact-messages', [ContactMessageController::class, 'store'])->middleware('throttle:5,1');
 
-    // Global Marketplace Search (public, maintenance-aware)
+    // Global Marketplace Search
     Route::middleware('maintenance')->group(function () {
         Route::get('/search', [SearchController::class, 'index']);
     });
 
-    // Public Profiles & Portfolios (maintenance-aware)
+    // Public Profiles & Portfolios
     Route::middleware('maintenance')->group(function () {
         Route::get('/freelancers', [FreelancerProfileController::class, 'index']);
         Route::get('/freelancers/{id}', [FreelancerProfileController::class, 'showPublic']);
@@ -86,7 +121,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/employers/{id}', [EmployerProfileController::class, 'showPublic']);
     });
 
-    // Marketplace Catalog (public, read-only, maintenance-aware)
+    // Marketplace Catalog
     Route::middleware('maintenance')->group(function () {
         Route::get('/categories', [CategoryController::class, 'index']);
         Route::get('/skills', [SkillController::class, 'index']);
@@ -107,11 +142,11 @@ Route::prefix('v1')->group(function () {
         });
     });
 
-    // Root API aliases for forgot/reset password
+    // Root API aliases
     Route::post('/forgot-password', [PasswordResetController::class, 'forgotPassword'])->middleware('throttle:6,1');
     Route::post('/reset-password', [PasswordResetController::class, 'resetPassword']);
 
-    // Authenticated Freelancer & Employer Profile Endpoints
+    // Authenticated Profiles
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/freelancer/profile', [FreelancerProfileController::class, 'showCurrent']);
         Route::put('/freelancer/profile', [FreelancerProfileController::class, 'update']);
@@ -119,7 +154,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/employer/profile', [EmployerProfileController::class, 'showCurrent']);
         Route::put('/employer/profile', [EmployerProfileController::class, 'update']);
 
-        // Portfolio Management (Freelancers)
+        // Portfolio Management
         Route::get('/freelancer/portfolio', [PortfolioController::class, 'index']);
         Route::post('/freelancer/portfolio', [PortfolioController::class, 'store']);
         Route::get('/freelancer/portfolio/{portfolio}', [PortfolioController::class, 'show']);
@@ -127,7 +162,7 @@ Route::prefix('v1')->group(function () {
         Route::delete('/freelancer/portfolio/{portfolio}', [PortfolioController::class, 'destroy']);
         Route::put('/freelancer/portfolio-reorder', [PortfolioController::class, 'reorder']);
 
-        // User Verification Submissions (Employer & Freelancer)
+        // User Verification Submissions
         Route::get('/verifications/me', [VerificationSubmissionController::class, 'showMe']);
         Route::post('/verifications', [VerificationSubmissionController::class, 'store']);
     });
@@ -140,7 +175,6 @@ Route::prefix('v1')->group(function () {
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/employer/jobs', [JobController::class, 'mine']);
-
         Route::post('/jobs', [JobController::class, 'store']);
         Route::put('/jobs/{job}', [JobController::class, 'update']);
         Route::delete('/jobs/{job}', [JobController::class, 'destroy']);
@@ -164,7 +198,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/jobs/{job}/proposals/{proposal}/accept', [ProposalController::class, 'accept']);
     });
 
-    // Role-Protected Test Authorization Endpoints
+    // Test Endpoints
     Route::middleware(['auth:sanctum'])->group(function () {
         Route::middleware('role:freelancer')->get('/freelancer/dashboard-test', function () {
             return response()->json(['success' => true, 'message' => 'Welcome Freelancer! Access granted.']);
@@ -179,43 +213,7 @@ Route::prefix('v1')->group(function () {
         });
     });
 
-    /*
-    |--------------------------------------------------------------------------
-    | Admin Routes — /api/v1/admin/*
-    |--------------------------------------------------------------------------
-    */
-    use App\Http\Controllers\Api\V1\Admin\DashboardController;
-    use App\Http\Controllers\Api\V1\Admin\UserController;
-    use App\Http\Controllers\Api\V1\Admin\VerificationController;
-    use App\Http\Controllers\Api\V1\Admin\JobController as AdminJobController;
-    use App\Http\Controllers\Api\V1\Admin\ReportController;
-    use App\Http\Controllers\Api\V1\Admin\CategoryController as AdminCategoryController;
-    use App\Http\Controllers\Api\V1\Admin\SkillController as AdminSkillController;
-    use App\Http\Controllers\Api\V1\Admin\SettingController;
-    use App\Http\Controllers\Api\V1\Admin\FreelancerApprovalController;
-    use App\Http\Controllers\Api\V1\Admin\RoleController;
-    use App\Http\Controllers\Api\V1\Admin\PermissionController;
-    use App\Http\Controllers\Api\V1\Admin\AdminUserController;
-    use App\Http\Controllers\Api\V1\Admin\AdminSecurityController;
-    use App\Http\Controllers\Api\V1\AvatarController;
-    use App\Http\Controllers\Api\V1\CredentialController;
-    use App\Http\Controllers\Api\V1\MessageController;
-    use App\Http\Controllers\Api\V1\NotificationController;
-    use App\Http\Controllers\Api\V1\ReviewController;
-    use App\Http\Controllers\Api\V1\SavedJobController;
-    use App\Http\Controllers\Api\V1\SavedFreelancerController;
-    use App\Http\Controllers\Api\V1\ContractController;
-    use App\Http\Controllers\Api\V1\MilestoneController;
-    use App\Http\Controllers\Api\V1\PaymentController;
-    use App\Http\Controllers\Api\V1\PaymentMethodController;
-    use App\Http\Controllers\Api\V1\WithdrawalController;
-    use App\Http\Controllers\Api\V1\TransactionController;
-    use App\Http\Controllers\Api\V1\Admin\FinanceController;
-    use App\Http\Controllers\Api\V1\RecommendationController;
-    use App\Http\Controllers\Api\V1\DisputeController;
-    use App\Http\Controllers\Api\V1\FeaturedController;
-
-    // ── Featured Listings ──────────────────────────────────────────────────
+    // Featured Listings
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/jobs/{job}/feature', [FeaturedController::class, 'featureJob']);
         Route::get('/jobs/{job}/featured', [FeaturedController::class, 'jobFeaturedStatus']);
@@ -223,7 +221,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/freelancer-profile/featured', [FeaturedController::class, 'profileFeaturedStatus']);
     });
 
-    // ── Disputes (User-facing) ──────────────────────────────────────────────
+    // Disputes
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/disputes', [DisputeController::class, 'index']);
         Route::get('/disputes/{report}', [DisputeController::class, 'show']);
@@ -231,7 +229,7 @@ Route::prefix('v1')->group(function () {
         Route::delete('/disputes/{report}', [DisputeController::class, 'destroy']);
     });
 
-    // ── Contracts ───────────────────────────────────────────────────────────
+    // Contracts
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/contracts', [ContractController::class, 'index']);
         Route::get('/contracts/{contract}', [ContractController::class, 'show']);
@@ -240,7 +238,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/contracts/{contract}/freelancer/decline', [ContractController::class, 'freelancerDecline']);
     });
 
-    // ── Milestones ──────────────────────────────────────────────────────────
+    // Milestones
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/contracts/{contract}/milestones', [MilestoneController::class, 'index']);
         Route::get('/contracts/{contract}/milestones/{milestone}', [MilestoneController::class, 'show']);
@@ -255,12 +253,12 @@ Route::prefix('v1')->group(function () {
         Route::delete('/contracts/{contract}/milestones/{milestone}/submissions/{submission}/files', [MilestoneController::class, 'deleteSubmissionFile']);
     });
 
-    // ── Serve milestone files ─────────────────────────────────────────────────
+    // Serve milestone files
     Route::get('/milestone-submissions/{path}', [\App\Http\Controllers\Api\V1\FileController::class, 'milestoneSubmission'])->where('path', '.*');
     Route::get('/milestone-attachments/{path}', [\App\Http\Controllers\Api\V1\FileController::class, 'milestoneAttachment'])->where('path', '.*');
     Route::delete('/milestone-attachments/{attachment}', [\App\Http\Controllers\Api\V1\FileController::class, 'destroyAttachment']);
 
-    // ── Payment Methods ──────────────────────────────────────────────────────
+    // Payment Methods
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/payment-methods', [PaymentMethodController::class, 'index']);
         Route::post('/payment-methods', [PaymentMethodController::class, 'store']);
@@ -268,14 +266,14 @@ Route::prefix('v1')->group(function () {
         Route::delete('/payment-methods/{paymentMethod}', [PaymentMethodController::class, 'destroy']);
     });
 
-    // ── Payments ────────────────────────────────────────────────────────────
+    // Payments
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/payments', [PaymentController::class, 'index']);
         Route::get('/payments/milestone/{milestone}', [PaymentController::class, 'getMilestonePayment']);
         Route::post('/payments/milestone/{milestone}/fund', [PaymentController::class, 'fundMilestone']);
     });
 
-    // ── Earnings & Withdrawals ──────────────────────────────────────────────
+    // Earnings & Withdrawals
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/earnings', [WithdrawalController::class, 'earnings']);
         Route::get('/employer-finance', [WithdrawalController::class, 'employerFinance']);
@@ -285,15 +283,13 @@ Route::prefix('v1')->group(function () {
         Route::delete('/withdrawals/{withdrawal}', [WithdrawalController::class, 'destroy']);
     });
 
-    // ── Transactions (Financial Ledger) ─────────────────────────────────────
+    // Transactions
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/transactions', [TransactionController::class, 'index']);
         Route::delete('/transactions/{id}', [TransactionController::class, 'destroy']);
     });
 
-    // ── Add Funds (Wallet Deposit) ──────────────────────────────────────
-    use App\Http\Controllers\Api\V1\AddFundsController;
-
+    // Add Funds
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/wallet/deposit', [AddFundsController::class, 'initiate']);
         Route::get('/wallet/deposit/{payment}', [AddFundsController::class, 'status']);
@@ -303,13 +299,13 @@ Route::prefix('v1')->group(function () {
 
     Route::post('/webhooks/deposit/{provider}', [AddFundsController::class, 'webhook']);
 
-    // ── Budget (Employer) ───────────────────────────────────────────────────
+    // Budget
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/budget', [BudgetController::class, 'show']);
         Route::post('/budget', [BudgetController::class, 'store']);
     });
 
-    // ── Webhooks ────────────────────────────────────────────────────────────
+    // Webhooks
     Route::post('/webhooks/{provider}', function ($provider) {
         $payload = file_get_contents('php://input');
 
@@ -323,7 +319,7 @@ Route::prefix('v1')->group(function () {
         return response()->json(['received' => true]);
     });
 
-    // ── Admin Group Protected by AdminOnly Middleware ───────────────────────
+    // ── Admin Group Protected by AdminOnly Middleware ──
     Route::middleware(['auth:sanctum', AdminOnly::class])->prefix('admin')->group(function () {
         Route::get('/dashboard', [DashboardController::class, 'index']);
 
@@ -491,9 +487,6 @@ Route::prefix('v1')->group(function () {
         Route::get('/recommendations/freelancers', [RecommendationController::class, 'recommendations']);
     });
 
-    use App\Http\Controllers\Api\V1\LmsWebhookController;
-    use App\Http\Controllers\Api\V1\SkillTestController;
-
     Route::middleware('maintenance')->group(function () {
         Route::post('/lms/certificate-completed', [LmsWebhookController::class, 'certificateCompleted']);
         Route::post('/lms/certificate-revoked', [LmsWebhookController::class, 'certificateRevoked']);
@@ -510,4 +503,4 @@ Route::prefix('v1')->group(function () {
         Route::get('/my-test-history', [SkillTestController::class, 'history']);
     });
 
-}); // End of V1 Prefix Group
+});
