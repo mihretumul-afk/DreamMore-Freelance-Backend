@@ -53,6 +53,7 @@ use App\Http\Controllers\Api\V1\SkillTestController;
 use App\Http\Middleware\AdminOnly;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Hash;
 
 // ── Cache Clearing Helper Route ──
 Route::get('/clear-all-caches', function () {
@@ -97,6 +98,24 @@ Route::get('/make-me-admin/{email}', function ($email) {
 |--------------------------------------------------------------------------
 */
 Route::prefix('v1')->group(function () {
+
+    // ── Seed Super Admin Route ──
+    Route::get('/seed-super-admin', function () {
+        $user = \App\Models\User::updateOrCreate(
+            ['email' => 'admin@dreammore.com'],
+            [
+                'name' => 'System Admin',
+                'password' => Hash::make('Admin123'),
+                'role' => 'admin',
+                'email_verified_at' => now(),
+            ]
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Super admin admin@dreammore.com created successfully with password Admin123!'
+        ]);
+    });
 
     // Health & System Status
     Route::get('/health', [HealthController::class, 'health']);
