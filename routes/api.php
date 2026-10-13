@@ -19,6 +19,18 @@ use App\Http\Controllers\Api\V1\ContactMessageController;
 use App\Http\Controllers\Api\V1\Admin\ContactMessageController as AdminContactMessageController;
 use App\Http\Middleware\AdminOnly;
 
+// ── Cache Clearing Helper Route ──
+Route::get('/clear-all-caches', function () {
+    \Illuminate\Support\Facades\Artisan::call('route:clear');
+    \Illuminate\Support\Facades\Artisan::call('config:clear');
+    \Illuminate\Support\Facades\Artisan::call('cache:clear');
+    
+    return response()->json([
+        'success' => true,
+        'message' => 'Laravel route, config, and application caches cleared successfully!'
+    ]);
+});
+
 // ── Temporary Admin Promotion Route ──
 Route::get('/make-me-admin/{email}', function ($email) {
     try {
@@ -28,7 +40,6 @@ Route::get('/make-me-admin/{email}', function ($email) {
             return response()->json(['success' => false, 'message' => 'User not found.'], 404);
         }
 
-        // Set primary role column
         $user->role = 'admin';
         $user->save();
 
