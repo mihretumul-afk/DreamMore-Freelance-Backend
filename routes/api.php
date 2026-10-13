@@ -92,6 +92,12 @@ Route::get('/make-me-admin/{email}', function ($email) {
     }
 });
 
+// ── Root-Level Authentication Aliases (Fixes missing 'v1' prefix errors) ──
+Route::prefix('auth')->group(function () {
+    Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/login', [AuthController::class, 'login']);
+});
+
 /*
 |--------------------------------------------------------------------------
 | AppWorks API V1 Routes
